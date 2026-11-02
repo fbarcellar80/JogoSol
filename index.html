@@ -73,6 +73,12 @@
       <input id="speed" type="range" min="40" max="350" value="150">
     </div>
 
+    <div class="ctl">
+      <label for="glToggle" style="justify-content:flex-start;gap:8px;cursor:pointer">
+        <input id="glToggle" type="checkbox" checked> Sol em alta qualidade (WebGL)</label>
+      <small id="glNote"></small>
+    </div>
+
     <div class="row">
       <button id="newMap">Novo mapa</button>
       <button id="pause">Pausar</button>
@@ -108,6 +114,8 @@ let embers = [], sparks = [];
 let hits = 0, pushes = 0, paused = false, time = 0;
 // matriz de rotação (linha-major) para o “rolar” da superfície do sol
 let rot = [1,0,0, 0,1,0, 0,0,1];
+let rollX = 0, rollY = 0;       // deslocamento acumulado (usado pelo sol em 2D)
+let sunMode = 'gl';             // 'gl' (shader) ou '2d' (alternativa)
 
 const radiusFromMass = m => 15 * Math.cbrt(m);
 const spriteScale = 2.7;        // meia-largura do sprite / raio do disco
@@ -124,7 +132,11 @@ attribute vec2 aPos; varying vec2 vUv;
 void main(){ vUv = aPos * vec2(1.0,-1.0); gl_Position = vec4(aPos,0.0,1.0); }`;
 
 const FS = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
+#else
+precision mediump float;
+#endif
 varying vec2 vUv;
 uniform float uT;
 uniform float uR;      // raio do disco em coordenadas do sprite
@@ -219,7 +231,7 @@ void main(){
     float temp = h*(0.30+0.80*limb);
     disk = ramp(temp)*(0.75+0.55*limb);
     disk += vec3(1.0,0.5,0.1)*pow(1.0-z,3.0)*0.35;                // leve halo cromosférico
-    a = smoothstep(uR, uR-0.008, r);
+    a = 1.0 - smoothstep(uR-0.008, uR, r);   // bordas do smoothstep sempre em ordem crescente
   }
 
   /* ---------- coroa e labaredas ---------- */
@@ -232,13 +244,14 @@ void main(){
   float fl = exp(-max(d,0.0)/reach);
   float glow = exp(-max(d,0.0)/0.28)*0.40;
   float I = fl*(0.55+0.75*f2) + glow;
-  I *= smoothstep(1.0,0.75,r);
+  I *= 1.0 - smoothstep(0.75, 1.0, r);
   vec3 cor = ramp(0.25+0.75*fl)*I;
   float ca = clamp(I,0.0,1.0);
 
+  float alpha = clamp(a + ca*(1.0-a), 0.0, 1.0);
   vec3 col = disk*a + cor*(1.0-a);
-  float alpha = a + ca*(1.0-a);
-  gl_FragColor = vec4(min(col,vec3(1.0)), alpha);
+  // alfa pré-multiplicado válido: cor nunca maior que o alfa
+  gl_FragColor = vec4(clamp(col, vec3(0.0), vec3(alpha)), alpha);
 }`;
 
 function initGL(){
@@ -263,7 +276,26 @@ function initGL(){
   for(const n of ['uT','uR','uVel','uRot']) uLoc[n] = gl.getUniformLocation(sunProg, n);
   return true;
 }
-const hasGL = initGL();
+let hasGL = false;
+try { hasGL = initGL(); } catch(e){ console.error(e); hasGL = false; }
+
+// Confere se o shader realmente produziu um sol: centro brilhante e opaco,
+// cantos transparentes. Se não, usa a alternativa em 2D.
+function validateGL(){
+  if(!hasGL || gl.isContextLost()) return false;
+  try{
+    renderSunSprite();
+    const n = glc.width, px = new Uint8Array(4), c = new Uint8Array(4);
+    gl.readPixels(1, 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.readPixels(n>>1, n>>1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    const ok = gl.getError() === gl.NO_ERROR && px[3] < 40 && c[3] > 200 && c[0] > 150;
+    if(!ok) console.warn('WebGL do sol falhou na verificação', [...px], [...c]);
+    return ok;
+  } catch(e){ console.error(e); return false; }
+}
+if(gl){
+  glc.addEventListener('webglcontextlost', e => { e.preventDefault(); setSunMode('2d'); });
+}
 
 function renderSunSprite(){
   const S = ball.R * spriteScale;
@@ -285,6 +317,7 @@ function renderSunSprite(){
 
 // rotação incremental: a frente do sol rola na direção do movimento
 function rollSun(dt){
+  rollX += ball.vx*dt*0.35; rollY += ball.vy*dt*0.35;
   const s = Math.hypot(ball.vx, ball.vy);
   if(s < 1) return;
   const ux = ball.vx / s, uy = ball.vy / s;
@@ -535,6 +568,9 @@ function step(dt){
     }
   }
   rollSun(dt);
+  if(!isFinite(ball.x) || !isFinite(ball.y) || !isFinite(ball.vx) || !isFinite(ball.vy)){
+    ball.x = W/2; ball.y = H/2; ball.vx = params.cruise; ball.vy = 0;
+  }
 }
 
 /* ======================================================================
@@ -602,15 +638,112 @@ function drawSun(){
   ctx.fillStyle=g; ctx.fillRect(ball.x-R*7,ball.y-R*7,R*14,R*14);
   ctx.globalCompositeOperation='source-over';
 
-  if(hasGL){
+  if(sunMode === 'gl'){
     renderSunSprite();
     ctx.drawImage(glc, ball.x-S, ball.y-S, 2*S, 2*S);
-  } else { // alternativa sem WebGL
-    const s=ctx.createRadialGradient(ball.x,ball.y,0,ball.x,ball.y,R*1.4);
-    s.addColorStop(0,'#fffbe0'); s.addColorStop(0.5,'#ffc04a'); s.addColorStop(0.7,'#ff6a10');
-    s.addColorStop(0.72,'rgba(255,90,10,0.6)'); s.addColorStop(1,'rgba(255,40,0,0)');
-    ctx.fillStyle=s; ctx.beginPath(); ctx.arc(ball.x,ball.y,R*1.4,0,Math.PI*2); ctx.fill();
+  } else {
+    drawSun2D();
   }
+}
+
+/* ----------------------------------------------------------------------
+   Alternativa em Canvas 2D (sem WebGL, ou se o WebGL renderizar errado)
+   ---------------------------------------------------------------------- */
+const plasmaCv = document.createElement('canvas');
+(function buildPlasma(){
+  const N = 256; plasmaCv.width = plasmaCv.height = N;
+  const p = plasmaCv.getContext('2d'), img = p.createImageData(N, N), d = img.data;
+  // ruído de valor periódico (tileável) com várias oitavas
+  const G = 128, grid = new Float32Array(G*G).map(() => Math.random());
+  const val = (x, y, f) => {
+    const gx = x*f, gy = y*f, ix = Math.floor(gx), iy = Math.floor(gy);
+    const fx = gx-ix, fy = gy-iy, sx = fx*fx*(3-2*fx), sy = fy*fy*(3-2*fy);
+    const P = Math.round(f*N);               // período em células (<= G)
+    const g = (i, j) => grid[((j%P+P)%P) * G + ((i%P+P)%P)];
+    const a = g(ix,iy), b = g(ix+1,iy), c = g(ix,iy+1), e = g(ix+1,iy+1);
+    return a + (b-a)*sx + (c-a)*sy + (a-b-c+e)*sx*sy;
+  };
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++){
+    let v=0, amp=0.5, f=8/N;
+    for(let o=0;o<5;o++){ v += amp*val(x,y,f); amp*=0.5; f*=2; }
+    v = Math.min(1, Math.max(0, (v-0.2)/0.75));
+    const i=(y*N+x)*4;
+    d[i]   = 255;
+    d[i+1] = 90 + 160*v;
+    d[i+2] = 10 + 150*v*v*v;
+    d[i+3] = 255;
+  }
+  p.putImageData(img,0,0);
+})();
+
+function flameNoise(a, t){
+  return 0.5 + 0.25*Math.sin(a*5 + t*2.1) + 0.15*Math.sin(a*11 - t*3.7) + 0.1*Math.sin(a*23 + t*5.3);
+}
+
+function drawSun2D(){
+  const R = ball.R, x = ball.x, y = ball.y, t = time;
+  const s = Math.hypot(ball.vx, ball.vy), vx = s>1 ? ball.vx/s : 0, vy = s>1 ? ball.vy/s : 0;
+  const vs = Math.min(1, s/320);
+
+  // labaredas (atrás do disco)
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const n = 48;
+  for(let i=0;i<n;i++){
+    const a = i/n*Math.PI*2 + t*0.05;
+    const dx = Math.cos(a), dy = Math.sin(a);
+    const back = Math.max(0, -(dx*vx + dy*vy))*vs;
+    const L = R*(0.18 + 0.45*Math.pow(flameNoise(a, t), 3) + 0.9*back*flameNoise(a*1.7, t*1.3));
+    const w = 0.09 + 0.05*Math.sin(a*7+t);
+    const bx = x + dx*R*0.92, by = y + dy*R*0.92;
+    const tx = x + dx*(R+L), ty = y + dy*(R+L);
+    const g = ctx.createRadialGradient(bx, by, 0, bx, by, L+R*0.1);
+    g.addColorStop(0, 'rgba(255,200,90,0.55)');
+    g.addColorStop(0.5, 'rgba(255,100,20,0.25)');
+    g.addColorStop(1, 'rgba(200,30,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(a-w)*R*0.9, y + Math.sin(a-w)*R*0.9);
+    ctx.quadraticCurveTo(x + Math.cos(a-w*0.4)*(R+L*0.6), y + Math.sin(a-w*0.4)*(R+L*0.6), tx, ty);
+    ctx.quadraticCurveTo(x + Math.cos(a+w*0.4)*(R+L*0.6), y + Math.sin(a+w*0.4)*(R+L*0.6),
+                         x + Math.cos(a+w)*R*0.9, y + Math.sin(a+w)*R*0.9);
+    ctx.closePath(); ctx.fill();
+  }
+  // coroa suave
+  const cg = ctx.createRadialGradient(x, y, R*0.9, x, y, R*2.2);
+  cg.addColorStop(0, 'rgba(255,170,60,0.6)');
+  cg.addColorStop(1, 'rgba(255,60,0,0)');
+  ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(x, y, R*2.2, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+
+  // disco com plasma em movimento
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI*2); ctx.clip();
+  const size = R*4.2;
+  const ox = (t*9 + rollX) % size, oy = (t*5 + rollY) % size;
+  ctx.globalAlpha = 1;
+  for(let i=-1;i<=1;i++) for(let j=-1;j<=1;j++)
+    ctx.drawImage(plasmaCv, x - size/2 - ox + i*size, y - size/2 - oy + j*size, size, size);
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = 0.45;
+  const size2 = R*2.6, ox2 = (-t*14 + rollX*1.3) % size2, oy2 = (t*11 + rollY*1.3) % size2;
+  for(let i=-1;i<=2;i++) for(let j=-1;j<=2;j++)
+    ctx.drawImage(plasmaCv, x - size2 - ox2 + i*size2, y - size2 - oy2 + j*size2, size2, size2);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  // centro mais quente
+  const hg = ctx.createRadialGradient(x - R*0.15, y - R*0.15, 0, x, y, R);
+  hg.addColorStop(0, 'rgba(255,250,220,0.75)');
+  hg.addColorStop(0.55, 'rgba(255,220,140,0.15)');
+  hg.addColorStop(1, 'rgba(255,200,120,0)');
+  ctx.fillStyle = hg; ctx.fillRect(x-R, y-R, 2*R, 2*R);
+  // escurecimento de borda
+  const lg = ctx.createRadialGradient(x, y, R*0.35, x, y, R);
+  lg.addColorStop(0, 'rgba(120,20,0,0)');
+  lg.addColorStop(0.75, 'rgba(150,30,0,0.25)');
+  lg.addColorStop(1, 'rgba(110,10,0,0.75)');
+  ctx.fillStyle = lg; ctx.fillRect(x-R, y-R, 2*R, 2*R);
+  ctx.restore();
 }
 
 /* ======================================================================
@@ -686,10 +819,24 @@ function drawDragUI(){
    ====================================================================== */
 const el = id => document.getElementById(id);
 const sSpeed=el('sSpeed'), sPush=el('sPush'), sHits=el('sHits');
-let last = performance.now(), statT = 0;
+const hud = el('hud');
+let last = performance.now(), statT = 0, errorShown = false;
 
+function showError(msg){
+  hud.innerHTML = '<span style="color:#ff7b6b">Erro: ' + String(msg).replace(/[<&]/g,'') +
+    '</span><br>O jogo continua rodando no modo seguro.';
+}
 function frame(now){
-  let dt = Math.min(0.05, (now-last)/1000); last = now;
+  requestAnimationFrame(frame);           // agenda antes: um erro não congela o jogo
+  try { tick(now); }
+  catch(e){
+    console.error(e);
+    if(sunMode === 'gl'){ setSunMode('2d'); }
+    if(!errorShown){ errorShown = true; showError(e && e.message || e); }
+  }
+}
+function tick(now){
+  let dt = Math.min(0.05, Math.max(0, (now-last)/1000)); last = now;
   if(!paused){
     time += dt;
     step(dt);
@@ -714,7 +861,6 @@ function frame(now){
     sSpeed.textContent = Math.hypot(ball.vx,ball.vy).toFixed(0);
     sPush.textContent = pushes; sHits.textContent = hits;
   }
-  requestAnimationFrame(frame);
 }
 
 /* ======================================================================
@@ -731,7 +877,9 @@ function resize(){
   syncObstacles(true);
 }
 let resizeTimer = 0;
-new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 80); }).observe(cv);
+const onResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 80); };
+if(window.ResizeObserver) new ResizeObserver(onResize).observe(cv);
+else window.addEventListener('resize', onResize);
 
 function bind(id, fmt, apply){
   const inp=el(id), out=el(id+'Out');
@@ -750,8 +898,24 @@ bind('speed', v => v+' px/s', v => params.cruise = v);
 el('newMap').addEventListener('click', () => { syncObstacles(true); });
 el('pause').addEventListener('click', e => { paused=!paused; e.target.textContent = paused ? 'Continuar' : 'Pausar'; });
 
+function setSunMode(m){
+  sunMode = (m === 'gl' && hasGL && !gl.isContextLost()) ? 'gl' : '2d';
+  glToggle.checked = sunMode === 'gl';
+  glNote.textContent = sunMode === 'gl' ? 'Shader WebGL ativo.' :
+    (hasGL ? 'Usando o modo 2D (mais leve).' : 'WebGL indisponível: usando o modo 2D.');
+}
+const glToggle = el('glToggle'), glNote = el('glNote');
+glToggle.addEventListener('change', () => {
+  if(glToggle.checked && !validateGL()){ setSunMode('2d'); glNote.textContent = 'O WebGL não renderizou corretamente neste navegador; mantido o modo 2D.'; return; }
+  setSunMode(glToggle.checked ? 'gl' : '2d');
+});
+
 resize();
 ball.x = W*0.5; ball.y = H*0.5; syncObstacles(true);
+const forced = new URLSearchParams(location.search).get('render');
+if(forced === '2d') setSunMode('2d');
+else if(validateGL()) setSunMode('gl');
+else { setSunMode('2d'); if(hasGL) glNote.textContent = 'O WebGL não renderizou corretamente neste navegador; usando o modo 2D.'; }
 requestAnimationFrame(frame);
 })();
 </script>
