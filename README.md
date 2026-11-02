@@ -3,7 +3,8 @@
 Protótipo de jogo web (um único arquivo: `index.html`). Abra no navegador.
 
 Um sol incandescente vaga pelo espaço. Clique sobre ele, **arraste** na direção desejada e solte
-para aplicar um empurrão. Como o sol tem muita inércia, um empurrão só desvia um pouco a rota.
+para girar a rota. Um arraste completo (160 px) gira a rota até o **desvio máximo**, ajustável de 90° a 180°
+(vale para a massa inicial; um sol mais pesado gira menos e um mais leve gira mais). Arrastes menores giram proporcionalmente.
 
 ## Elementos
 - **Obstáculos**: rochas espaciais, planetas do sistema solar e lixo espacial (satélites, estágios de foguete, destroços). O sol quica neles.

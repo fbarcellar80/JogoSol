@@ -107,7 +107,12 @@
     <div class="ctl">
       <label for="mass">Massa do sol (inércia) <output id="massOut"></output></label>
       <input id="mass" type="range" min="1" max="40" step="0.5" value="8">
-      <small>Muda durante o jogo. Mais massa = empurrões mudam menos a rota.</small>
+      <small>Muda durante o jogo. Mais massa = empurrões giram menos a rota.</small>
+    </div>
+    <div class="ctl">
+      <label for="turn">Desvio máximo por empurrão <output id="turnOut"></output></label>
+      <input id="turn" type="range" min="90" max="180" step="5" value="90">
+      <small>Quanto um arraste completo gira a rota com a massa inicial (8). Sol mais pesado gira menos; mais leve gira mais (até 180°).</small>
     </div>
     <div class="ctl">
       <label for="speed">Velocidade de cruzeiro <output id="speedOut"></output></label>
@@ -145,9 +150,8 @@
 /* ======================================================================
    Parâmetros e estado
    ====================================================================== */
-const params = { rand: 0.35, count: 8, ships: 4, hazards: 3, cruise: 150 };
-const IMPULSE_PER_PX = 2.5;     // impulso por pixel arrastado
-const MAX_DRAG = 220;           // arraste máximo considerado (px)
+const params = { rand: 0.35, count: 8, ships: 4, hazards: 3, cruise: 150, maxTurn: 90 };
+const MAX_DRAG = 160;           // arraste (px) que corresponde a um empurrão completo
 const RESTITUTION = 0.85;
 const START_MASS = 8, MIN_MASS = 1, MAX_MASS = 40;
 const BOSS_INTERVAL = 180;      // segundos entre artilharias
@@ -1438,6 +1442,33 @@ function drawSun(){
 }
 
 /* ======================================================================
+   Empurrão: gira a rota do sol na direção do arraste
+   ====================================================================== */
+// Giro máximo de um arraste completo. Com a massa inicial vale o parâmetro
+// (90° a 180°); um sol mais pesado gira menos e um mais leve gira mais.
+function maxTurnRad(){
+  const k = clamp(Math.sqrt(START_MASS / Math.max(MIN_MASS, S.mass)), 0.4, 2);
+  return Math.min(Math.PI, params.maxTurn*Math.PI/180 * k);
+}
+// Resultado de um arraste (dx, dy): a direção do arraste é a rota desejada e
+// o comprimento é a força (MAX_DRAG = empurrão completo). A rapidez é mantida.
+function pushResult(dx, dy){
+  const l = Math.hypot(dx, dy), f = clamp(l/MAX_DRAG, 0, 1), want = Math.atan2(dy, dx);
+  const sp = Math.hypot(ball.vx, ball.vy);
+  if(sp < 20){ // quase parado: parte na direção do arraste
+    const v = Math.max(params.cruise*0.6*f, sp);
+    return { nvx: Math.cos(want)*v, nvy: Math.sin(want)*v, turn: 0 };
+  }
+  const cur = Math.atan2(ball.vy, ball.vx);
+  let diff = want - cur;
+  while(diff > Math.PI) diff -= Math.PI*2;
+  while(diff <= -Math.PI) diff += Math.PI*2;
+  const turn = Math.sign(diff) * Math.min(Math.abs(diff), maxTurnRad()*f);
+  const na = cur + turn, v = Math.max(sp, params.cruise*0.5);
+  return { nvx: Math.cos(na)*v, nvy: Math.sin(na)*v, turn };
+}
+
+/* ======================================================================
    Interação: clicar e arrastar
    ====================================================================== */
 const drag = { active:false, id:null, sx:0, sy:0, cx:0, cy:0 };
@@ -1463,8 +1494,8 @@ function release(e){
   if(!drag.active || e.pointerId !== drag.id) return;
   const [dx, dy] = dragVec(), l = Math.hypot(dx, dy);
   if(l > 4 && !S.over){
-    ball.vx += dx*IMPULSE_PER_PX/S.mass;
-    ball.vy += dy*IMPULSE_PER_PX/S.mass;
+    const r = pushResult(dx, dy);
+    ball.vx = r.nvx; ball.vy = r.nvy;
     S.pushes++;
     spawnSparks(ball.x-dx/l*ball.R, ball.y-dy/l*ball.R, -dx/l, -dy/l, l*0.6);
   }
@@ -1490,12 +1521,19 @@ function drawDragUI(){
   ctx.save(); ctx.lineCap = 'round';
   const ux = dx/l, uy = dy/l, st = ball.R*1.15;
   arrow(ball.x+ux*st, ball.y+uy*st, ball.x+ux*st+dx, ball.y+uy*st+dy, 'rgba(255,220,150,0.9)', 3);
-  const k = 0.6, nvx = ball.vx + dx*IMPULSE_PER_PX/S.mass, nvy = ball.vy + dy*IMPULSE_PER_PX/S.mass;
-  arrow(ball.x, ball.y, ball.x+ball.vx*k, ball.y+ball.vy*k, 'rgba(255,255,255,0.35)', 2, [5,5]);
-  arrow(ball.x, ball.y, ball.x+nvx*k, ball.y+nvy*k, 'rgba(120,220,255,0.85)', 2.5);
-  const ang = Math.abs(Math.atan2(ball.vx*nvy-ball.vy*nvx, ball.vx*nvx+ball.vy*nvy))*180/Math.PI;
-  ctx.font = '12px system-ui,sans-serif'; ctx.fillStyle = 'rgba(200,240,255,0.9)';
-  ctx.fillText(`desvio ${ang.toFixed(0)}°`, ball.x+nvx*k+8, ball.y+nvy*k-8);
+  const r = pushResult(dx, dy), cur = Math.atan2(ball.vy, ball.vx), full = maxTurnRad();
+  const L = Math.max(ball.R*3, 90);
+  // cone de alcance: até onde um arraste completo consegue girar a rota
+  ctx.fillStyle = 'rgba(120,220,255,0.08)'; ctx.strokeStyle = 'rgba(120,220,255,0.25)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(ball.x, ball.y); ctx.arc(ball.x, ball.y, L, cur-full, cur+full); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  const ou = Math.hypot(ball.vx, ball.vy) > 1;
+  if(ou) arrow(ball.x, ball.y, ball.x+Math.cos(cur)*L, ball.y+Math.sin(cur)*L, 'rgba(255,255,255,0.4)', 2, [5,5]);
+  const na = Math.atan2(r.nvy, r.nvx);
+  arrow(ball.x, ball.y, ball.x+Math.cos(na)*L, ball.y+Math.sin(na)*L, 'rgba(120,220,255,0.95)', 2.5);
+  ctx.font = '12px system-ui,sans-serif'; ctx.fillStyle = 'rgba(200,240,255,0.95)';
+  ctx.fillText(`giro ${Math.abs(r.turn*180/Math.PI).toFixed(0)}° (máx ${(full*180/Math.PI).toFixed(0)}°)`,
+    ball.x+Math.cos(na)*L+8, ball.y+Math.sin(na)*L-8);
   ctx.restore();
 }
 
@@ -1644,6 +1682,7 @@ bind('ships', v => v, v => params.ships = v);
 bind('hazards', v => v, v => { params.hazards = v; if(W) syncWorld(false); });
 bind('mass', v => v.toFixed(1), v => { if(!S.over) setMass(v); });
 bind('speed', v => v+' px/s', v => params.cruise = v);
+bind('turn', v => v+'°', v => params.maxTurn = v);
 el('newMap').addEventListener('click', () => syncWorld(true));
 el('pause').addEventListener('click', e => { S.paused = !S.paused; e.target.textContent = S.paused ? 'Continuar' : 'Pausar'; });
 el('callBoss').addEventListener('click', () => { if(!S.over) spawnBoss(); });
