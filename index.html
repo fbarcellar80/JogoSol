@@ -1,0 +1,1718 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sol Errante</title>
+<style>
+  :root{
+    --bg:#05060b; --panel:#0f1018; --line:#2a2a3c; --text:#ece8f4;
+    --muted:#9a96ad; --accent:#ff9a2e; --good:#7be0a0; --bad:#ff7b6b;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+  #app{display:flex;height:100%}
+  #stage{flex:1;position:relative;min-width:0;min-height:0}
+  #game{display:block;width:100%;height:100%;touch-action:none;cursor:crosshair}
+  #game.over{cursor:grab}
+  #game.drag{cursor:grabbing}
+  #hud{position:absolute;left:14px;top:12px;pointer-events:none;font-size:13px;
+    color:var(--muted);text-shadow:0 1px 3px #000;max-width:calc(100% - 28px)}
+  #hud b{color:var(--text);font-weight:600}
+  #massRow{display:flex;align-items:center;gap:8px;margin-top:8px;color:var(--text)}
+  #massBar{width:160px;height:8px;border-radius:4px;background:#ffffff1a;overflow:hidden}
+  #massFill{height:100%;width:20%;background:linear-gradient(90deg,#ff5a1a,#ffb347,#fff2c0)}
+  #hudLine{margin-top:4px}
+  aside{width:290px;flex:none;background:var(--panel);border-left:1px solid var(--line);
+    padding:18px 18px;overflow:auto}
+  h1{margin:0 0 4px;font-size:20px;letter-spacing:.5px}
+  h1 span{color:var(--accent)}
+  .sub{margin:0 0 14px;font-size:12.5px;color:var(--muted);line-height:1.45}
+  .legend{font-size:12px;color:var(--muted);line-height:1.6;margin:0 0 16px;padding:0;list-style:none}
+  .legend li::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;
+    margin-right:7px;background:var(--c)}
+  .legend b{color:var(--text);font-weight:600}
+  .ctl{margin-bottom:14px}
+  .ctl label{display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px}
+  .ctl label output{color:var(--accent);font-variant-numeric:tabular-nums}
+  .ctl small{display:block;color:var(--muted);font-size:11.5px;margin-top:3px;line-height:1.35}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .row{display:flex;gap:8px;margin:6px 0 10px}
+  button{flex:1;background:#1b1a28;color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:9px 10px;font:inherit;font-size:13px;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  .stats{font-size:12.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:12px;line-height:1.7}
+  .stats b{color:var(--text);font-variant-numeric:tabular-nums}
+  #over{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    background:#000a;backdrop-filter:blur(2px)}
+  #over[hidden]{display:none}
+  #over .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:24px 28px;text-align:center;max-width:340px}
+  #over h2{margin:0 0 8px;color:var(--accent)}
+  #over p{color:var(--muted);font-size:14px;line-height:1.6;margin:0 0 16px}
+  @media (max-width:720px){
+    #app{flex-direction:column}
+    aside{width:100%;border-left:0;border-top:1px solid var(--line);max-height:45%;padding:14px 16px}
+    .sub,.legend{display:none}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="game"></canvas>
+    <div id="hud">
+      <div id="hint">Clique no sol e <b>arraste</b> na direção desejada — solte para empurrar.</div>
+      <div id="massRow">Massa <div id="massBar"><div id="massFill"></div></div> <b id="massTxt">8.0</b></div>
+      <div id="hudLine"></div>
+    </div>
+    <div id="over" hidden>
+      <div class="card">
+        <h2>O sol se apagou</h2>
+        <p id="overStats"></p>
+        <button id="restart2">Recomeçar</button>
+      </div>
+    </div>
+  </div>
+  <aside>
+    <h1>Sol <span>Errante</span></h1>
+    <p class="sub">Guie o sol pelo espaço com empurrões (clique, arraste e solte). Ele é pesado:
+      um empurrão só desvia um pouco a rota. Se a massa cair abaixo de 1, ele se apaga.</p>
+    <ul class="legend">
+      <li style="--c:#9aa3b5"><b>Rochas, planetas, lixo espacial</b>: obstáculos</li>
+      <li style="--c:#7be0a0"><b>Naves</b>: atingi-las aumenta a massa</li>
+      <li style="--c:#9cc4ff"><b>Estrelas</b>: roubam massa a cada choque</li>
+      <li style="--c:#b06cff"><b>Buracos negros</b>: puxam o sol e drenam massa</li>
+      <li style="--c:#ff4d6d"><b>Artilharia interestelar</b>: a cada 3 min; 4 golpes para destruir</li>
+    </ul>
+
+    <div class="ctl">
+      <label for="rand">Aleatoriedade <output id="randOut"></output></label>
+      <input id="rand" type="range" min="0" max="100" value="35">
+    </div>
+    <div class="ctl">
+      <label for="count">Obstáculos <output id="countOut"></output></label>
+      <input id="count" type="range" min="0" max="20" value="8">
+      <small>Rochas espaciais, planetas do sistema solar e lixo espacial.</small>
+    </div>
+    <div class="ctl">
+      <label for="ships">Naves <output id="shipsOut"></output></label>
+      <input id="ships" type="range" min="0" max="10" value="4">
+    </div>
+    <div class="ctl">
+      <label for="hazards">Estrelas e buracos negros <output id="hazardsOut"></output></label>
+      <input id="hazards" type="range" min="0" max="8" value="3">
+    </div>
+    <div class="ctl">
+      <label for="mass">Massa do sol (inércia) <output id="massOut"></output></label>
+      <input id="mass" type="range" min="1" max="40" step="0.5" value="8">
+      <small>Muda durante o jogo. Mais massa = empurrões giram menos a rota.</small>
+    </div>
+    <div class="ctl">
+      <label for="turn">Desvio máximo por empurrão <output id="turnOut"></output></label>
+      <input id="turn" type="range" min="90" max="180" step="5" value="90">
+      <small>Quanto um arraste completo gira a rota com a massa inicial (8). Sol mais pesado gira menos; mais leve gira mais (até 180°).</small>
+    </div>
+    <div class="ctl">
+      <label for="speed">Velocidade de cruzeiro <output id="speedOut"></output></label>
+      <input id="speed" type="range" min="40" max="350" value="150">
+    </div>
+    <div class="ctl">
+      <label for="glToggle" style="justify-content:flex-start;gap:8px;cursor:pointer">
+        <input id="glToggle" type="checkbox" checked> Sol em alta qualidade (WebGL)</label>
+      <small id="glNote"></small>
+    </div>
+
+    <div class="row">
+      <button id="newMap">Novo mapa</button>
+      <button id="pause">Pausar</button>
+    </div>
+    <div class="row">
+      <button id="callBoss">Chamar artilharia</button>
+      <button id="restart">Recomeçar</button>
+    </div>
+
+    <div class="stats">
+      Tempo: <b id="sTime">0:00</b><br>
+      Próxima artilharia: <b id="sBoss">3:00</b><br>
+      Naves destruídas: <b id="sShips">0</b><br>
+      Artilharias destruídas: <b id="sBosses">0</b><br>
+      Empurrões: <b id="sPush">0</b> · Velocidade: <b id="sSpeed">0</b>
+    </div>
+  </aside>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ======================================================================
+   Parâmetros e estado
+   ====================================================================== */
+const params = { rand: 0.35, count: 8, ships: 4, hazards: 3, cruise: 150, maxTurn: 90 };
+const MAX_DRAG = 160;           // arraste (px) que corresponde a um empurrão completo
+const RESTITUTION = 0.85;
+const START_MASS = 8, MIN_MASS = 1, MAX_MASS = 40;
+const BOSS_INTERVAL = 180;      // segundos entre artilharias
+const BOSS_HP = 4;
+
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+
+const S = {
+  mass: START_MASS, time: 0, nextBoss: BOSS_INTERVAL, paused: false, over: false,
+  pushes: 0, shipsKilled: 0, bossesKilled: 0, shake: 0, banner: null, shipTimer: 1, drainAcc: 0
+};
+const ball = { x: 200, y: 200, vx: 110, vy: 70, R: 30, wander: Math.random() * Math.PI * 2 };
+let obstacles = [], stars = [], holes = [], ships = [], bosses = [], bolts = [];
+let embers = [], sparks = [], debris = [], streams = [], flashes = [], texts = [];
+let time = 0;                   // tempo de animação (sol)
+// matriz de rotação (linha-major) para o “rolar” da superfície do sol
+let rot = [1,0,0, 0,1,0, 0,0,1];
+let rollX = 0, rollY = 0;       // deslocamento acumulado (usado pelo sol em 2D)
+let sunMode = 'gl';             // 'gl' (shader) ou '2d' (alternativa)
+
+const radiusFromMass = m => 15 * Math.cbrt(m);
+const spriteScale = 2.7;        // meia-largura do sprite / raio do disco
+const rnd = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+/* ======================================================================
+   Sol em WebGL (shader procedural) — renderizado num canvas fora da tela
+   ====================================================================== */
+const glc = document.createElement('canvas');
+const gl = glc.getContext('webgl', { premultipliedAlpha: true, preserveDrawingBuffer: true, antialias: false });
+let sunProg = null, uLoc = {};
+
+const VS = `
+attribute vec2 aPos; varying vec2 vUv;
+void main(){ vUv = aPos * vec2(1.0,-1.0); gl_Position = vec4(aPos,0.0,1.0); }`;
+
+const FS = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec2 vUv;
+uniform float uT;
+uniform float uR;      // raio do disco em coordenadas do sprite
+uniform vec2  uVel;    // velocidade normalizada (0..1)
+uniform mat3  uRot;
+
+vec3 mod289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}
+vec4 mod289(vec4 x){return x-floor(x*(1.0/289.0))*289.0;}
+vec4 permute(vec4 x){return mod289(((x*34.0)+1.0)*x);}
+vec4 taylorInvSqrt(vec4 r){return 1.79284291400159-0.85373472095314*r;}
+float snoise(vec3 v){
+  const vec2 C=vec2(1.0/6.0,1.0/3.0);
+  const vec4 D=vec4(0.0,0.5,1.0,2.0);
+  vec3 i=floor(v+dot(v,C.yyy));
+  vec3 x0=v-i+dot(i,C.xxx);
+  vec3 g=step(x0.yzx,x0.xyz);
+  vec3 l=1.0-g;
+  vec3 i1=min(g.xyz,l.zxy);
+  vec3 i2=max(g.xyz,l.zxy);
+  vec3 x1=x0-i1+C.xxx;
+  vec3 x2=x0-i2+C.yyy;
+  vec3 x3=x0-D.yyy;
+  i=mod289(i);
+  vec4 p=permute(permute(permute(i.z+vec4(0.0,i1.z,i2.z,1.0))+i.y+vec4(0.0,i1.y,i2.y,1.0))+i.x+vec4(0.0,i1.x,i2.x,1.0));
+  float n_=0.142857142857;
+  vec3 ns=n_*D.wyz-D.xzx;
+  vec4 j=p-49.0*floor(p*ns.z*ns.z);
+  vec4 x_=floor(j*ns.z);
+  vec4 y_=floor(j-7.0*x_);
+  vec4 x=x_*ns.x+ns.yyyy;
+  vec4 y=y_*ns.x+ns.yyyy;
+  vec4 h=1.0-abs(x)-abs(y);
+  vec4 b0=vec4(x.xy,y.xy);
+  vec4 b1=vec4(x.zw,y.zw);
+  vec4 s0=floor(b0)*2.0+1.0;
+  vec4 s1=floor(b1)*2.0+1.0;
+  vec4 sh=-step(h,vec4(0.0));
+  vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy;
+  vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;
+  vec3 p0=vec3(a0.xy,h.x);
+  vec3 p1=vec3(a0.zw,h.y);
+  vec3 p2=vec3(a1.xy,h.z);
+  vec3 p3=vec3(a1.zw,h.w);
+  vec4 norm=taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));
+  p0*=norm.x;p1*=norm.y;p2*=norm.z;p3*=norm.w;
+  vec4 m=max(0.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.0);
+  m=m*m;
+  return 42.0*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
+}
+float fbm(vec3 p){
+  float f=0.0, a=0.5;
+  for(int i=0;i<5;i++){ f+=a*snoise(p); p=p*2.03+vec3(1.7,9.2,3.1); a*=0.5; }
+  return f;
+}
+float fbm3(vec3 p){
+  float f=0.0, a=0.5;
+  for(int i=0;i<3;i++){ f+=a*snoise(p); p=p*2.03+vec3(1.7,9.2,3.1); a*=0.5; }
+  return f;
+}
+// rampa de cor de corpo negro: vermelho escuro -> laranja -> amarelo -> branco
+vec3 ramp(float x){
+  x=clamp(x,0.0,1.5);
+  vec3 c1=vec3(0.30,0.02,0.00), c2=vec3(0.95,0.22,0.02), c3=vec3(1.00,0.58,0.10),
+       c4=vec3(1.00,0.88,0.50), c5=vec3(1.00,1.00,0.95);
+  if(x<0.3) return mix(c1,c2,x/0.3);
+  if(x<0.6) return mix(c2,c3,(x-0.3)/0.3);
+  if(x<0.9) return mix(c3,c4,(x-0.6)/0.3);
+  return mix(c4,c5,clamp((x-0.9)/0.5,0.0,1.0));
+}
+void main(){
+  vec2 p=vUv; float r=length(p);
+  float vs=length(uVel); vec2 vdir = vs>0.001 ? uVel/vs : vec2(0.0);
+
+  /* ---------- disco (fotosfera) ---------- */
+  vec3 disk=vec3(0.0); float a=0.0;
+  if(r<uR+0.01){
+    vec2 q=p/uR; float z=sqrt(max(0.0,1.0-dot(q,q)));
+    vec3 n=vec3(q,z);
+    vec3 sp=uRot*n;
+    // turbulência com distorção de domínio (plasma em convecção)
+    vec3 w = sp*2.4 + 0.9*vec3(
+      fbm3(sp*1.6+vec3(0.0,0.0,uT*0.08)),
+      fbm3(sp*1.6+vec3(5.2,1.3,2.8)-uT*0.06),
+      fbm3(sp*1.6+vec3(1.7,9.2,4.1)+uT*0.07));
+    float g  = fbm(w*1.5 + uT*0.05);
+    float gr = 1.0-abs(snoise(sp*22.0+vec3(0.0,0.0,uT*0.6)));   // granulação
+    float fil= pow(1.0-abs(snoise(w*3.0-uT*0.1)),6.0);           // filamentos brilhantes
+    float spot=smoothstep(0.62,0.78,snoise(sp*1.8+vec3(17.0,3.0,uT*0.01))); // manchas solares
+    float h = 0.62 + 0.45*g + 0.10*gr + 0.25*fil;
+    h *= 1.0 - 0.45*spot;
+    float limb = pow(z,0.45);                                     // escurecimento de borda
+    float temp = h*(0.30+0.80*limb);
+    disk = ramp(temp)*(0.75+0.55*limb);
+    disk += vec3(1.0,0.5,0.1)*pow(1.0-z,3.0)*0.35;                // leve halo cromosférico
+    a = 1.0 - smoothstep(uR-0.008, uR, r);   // bordas do smoothstep sempre em ordem crescente
+  }
+
+  /* ---------- coroa e labaredas ---------- */
+  vec2 dir = r>0.0001 ? p/r : vec2(1.0,0.0);
+  float back = max(0.0,-dot(dir,vdir))*vs;          // labaredas arrastadas para trás
+  float d = r-uR;
+  float f  = fbm3(vec3(dir*2.3, d*5.0 - uT*1.1))*0.5+0.5;
+  float f2 = fbm3(vec3(dir*5.5, d*11.0 - uT*2.2))*0.5+0.5;
+  float reach = 0.045 + 0.20*f*f*f + 0.32*back*f2*f2;
+  float fl = exp(-max(d,0.0)/reach);
+  float glow = exp(-max(d,0.0)/0.28)*0.40;
+  float I = fl*(0.55+0.75*f2) + glow;
+  I *= 1.0 - smoothstep(0.75, 1.0, r);
+  vec3 cor = ramp(0.25+0.75*fl)*I;
+  float ca = clamp(I,0.0,1.0);
+
+  float alpha = clamp(a + ca*(1.0-a), 0.0, 1.0);
+  vec3 col = disk*a + cor*(1.0-a);
+  // alfa pré-multiplicado válido: cor nunca maior que o alfa
+  gl_FragColor = vec4(clamp(col, vec3(0.0), vec3(alpha)), alpha);
+}`;
+
+function initGL(){
+  if(!gl) return false;
+  const mk = (type, src) => {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){ console.error(gl.getShaderInfoLog(s)); return null; }
+    return s;
+  };
+  const vs = mk(gl.VERTEX_SHADER, VS), fs = mk(gl.FRAGMENT_SHADER, FS);
+  if(!vs || !fs) return false;
+  sunProg = gl.createProgram();
+  gl.attachShader(sunProg, vs); gl.attachShader(sunProg, fs); gl.linkProgram(sunProg);
+  if(!gl.getProgramParameter(sunProg, gl.LINK_STATUS)){ console.error(gl.getProgramInfoLog(sunProg)); return false; }
+  gl.useProgram(sunProg);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(sunProg, 'aPos');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  for(const n of ['uT','uR','uVel','uRot']) uLoc[n] = gl.getUniformLocation(sunProg, n);
+  return true;
+}
+let hasGL = false;
+try { hasGL = initGL(); } catch(e){ console.error(e); hasGL = false; }
+
+// Confere se o shader realmente produziu um sol: centro brilhante e opaco,
+// cantos transparentes. Se não, usa a alternativa em 2D.
+function validateGL(){
+  if(!hasGL || gl.isContextLost()) return false;
+  try{
+    renderSunSprite();
+    const n = glc.width, px = new Uint8Array(4), c = new Uint8Array(4);
+    gl.readPixels(1, 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.readPixels(n>>1, n>>1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    const ok = gl.getError() === gl.NO_ERROR && px[3] < 40 && c[3] > 200 && c[0] > 150;
+    if(!ok) console.warn('WebGL do sol falhou na verificação', [...px], [...c]);
+    return ok;
+  } catch(e){ console.error(e); return false; }
+}
+if(gl){
+  glc.addEventListener('webglcontextlost', e => { e.preventDefault(); setSunMode('2d'); });
+}
+
+function renderSunSprite(){
+  const S = ball.R * spriteScale;
+  const px = Math.min(640, Math.ceil(2 * S * DPR));
+  if(glc.width !== px){ glc.width = glc.height = px; }
+  gl.viewport(0, 0, px, px);
+  gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.uniform1f(uLoc.uT, time);
+  gl.uniform1f(uLoc.uR, 1 / spriteScale);
+  const vn = 1 / 320;
+  let vx = ball.vx * vn, vy = ball.vy * vn;
+  const l = Math.hypot(vx, vy); if(l > 1){ vx /= l; vy /= l; }
+  gl.uniform2f(uLoc.uVel, vx, vy);
+  // envia como coluna-major
+  gl.uniformMatrix3fv(uLoc.uRot, false, new Float32Array([
+    rot[0], rot[3], rot[6], rot[1], rot[4], rot[7], rot[2], rot[5], rot[8]]));
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+// rotação incremental: a frente do sol rola na direção do movimento
+function rollSun(dt){
+  rollX += ball.vx*dt*0.35; rollY += ball.vy*dt*0.35;
+  const s = Math.hypot(ball.vx, ball.vy);
+  if(s < 1) return;
+  const ux = ball.vx / s, uy = ball.vy / s;
+  const th = s * dt / ball.R * 0.35;
+  const c = Math.cos(th) - 1, sn = Math.sin(th);
+  // dQ = I + (cos-1)(uu^T + zz^T) + sin(u z^T - z u^T),  u=(ux,uy,0), z=(0,0,1)
+  const dQ = [
+    1 + c*ux*ux, c*ux*uy,     sn*ux,
+    c*uy*ux,     1 + c*uy*uy, sn*uy,
+    -sn*ux,      -sn*uy,      1 + c
+  ];
+  // rot = rot * dQ^T
+  const r = rot, n = new Array(9);
+  for(let i=0;i<3;i++) for(let j=0;j<3;j++){
+    n[i*3+j] = r[i*3]*dQ[j*3] + r[i*3+1]*dQ[j*3+1] + r[i*3+2]*dQ[j*3+2];
+  }
+  // reortonormaliza (Gram-Schmidt nas linhas)
+  const norm = v => { const l = Math.hypot(v[0],v[1],v[2]); return [v[0]/l,v[1]/l,v[2]/l]; };
+  let a = norm(n.slice(0,3)), b = n.slice(3,6);
+  const d = a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  b = norm([b[0]-d*a[0], b[1]-d*a[1], b[2]-d*a[2]]);
+  const cc = [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+  rot = [...a, ...b, ...cc];
+}
+
+/* ======================================================================
+   Ruído 2D (para texturas de planetas e rochas)
+   ====================================================================== */
+function hash2(x, y, s){
+  let h = Math.imul(x|0, 374761393) ^ Math.imul(y|0, 668265263) ^ Math.imul(s|0, 982451653);
+  h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+function vnoise(x, y, s){
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x-ix, fy = y-iy;
+  const ux = fx*fx*(3-2*fx), uy = fy*fy*(3-2*fy);
+  const a = hash2(ix,iy,s), b = hash2(ix+1,iy,s), c = hash2(ix,iy+1,s), d = hash2(ix+1,iy+1,s);
+  return a + (b-a)*ux + (c-a)*uy + (a-b-c+d)*ux*uy;
+}
+function fbm2(x, y, s, oct = 4){
+  let v = 0, a = 0.5, f = 1, n = 0;
+  for(let i=0;i<oct;i++){ v += a*vnoise(x*f, y*f, s+i*17); n += a; a *= 0.5; f *= 2; }
+  return v / n;
+}
+const mix = (a, b, t) => a + (b-a)*t;
+const mix3 = (c1, c2, t) => [mix(c1[0],c2[0],t), mix(c1[1],c2[1],t), mix(c1[2],c2[2],t)];
+
+/* ======================================================================
+   Fundo: campo de estrelas e nebulosas
+   ====================================================================== */
+const skyCv = document.createElement('canvas');
+let twinkles = [];
+function buildSky(){
+  skyCv.width = Math.max(1, Math.floor(W*DPR)); skyCv.height = Math.max(1, Math.floor(H*DPR));
+  const f = skyCv.getContext('2d');
+  f.setTransform(DPR,0,0,DPR,0,0);
+  const bg = f.createLinearGradient(0,0,W,H);
+  bg.addColorStop(0,'#05060c'); bg.addColorStop(0.5,'#080816'); bg.addColorStop(1,'#04050a');
+  f.fillStyle = bg; f.fillRect(0,0,W,H);
+  // nebulosas
+  f.globalCompositeOperation = 'lighter';
+  const neb = [[120,60,200],[40,90,200],[200,60,120],[30,140,160]];
+  for(let k=0;k<3;k++){
+    const cx = rnd(0,W), cy = rnd(0,H), col = neb[(Math.random()*neb.length)|0];
+    for(let i=0;i<26;i++){
+      const x = cx + rnd(-1,1)*W*0.25, y = cy + rnd(-1,1)*H*0.2, r = rnd(60, 220);
+      const g = f.createRadialGradient(x,y,0,x,y,r);
+      g.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},0.035)`);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      f.fillStyle = g; f.fillRect(x-r,y-r,2*r,2*r);
+    }
+  }
+  // galáxia distante
+  const gx = rnd(W*0.1, W*0.9), gy = rnd(H*0.1, H*0.9);
+  f.save(); f.translate(gx,gy); f.rotate(rnd(0,Math.PI)); f.scale(1,0.35);
+  const gg = f.createRadialGradient(0,0,0,0,0,60);
+  gg.addColorStop(0,'rgba(255,240,220,0.35)'); gg.addColorStop(0.3,'rgba(180,160,220,0.12)'); gg.addColorStop(1,'rgba(0,0,0,0)');
+  f.fillStyle = gg; f.beginPath(); f.arc(0,0,60,0,Math.PI*2); f.fill(); f.restore();
+  // estrelas
+  const n = W*H/700;
+  for(let i=0;i<n;i++){
+    const x = Math.random()*W, y = Math.random()*H, b = Math.pow(Math.random(), 3);
+    const t = Math.random();
+    const c = t < 0.15 ? [180,200,255] : t < 0.3 ? [255,220,180] : [255,255,255];
+    f.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${0.25 + 0.75*b})`;
+    const s = b > 0.8 ? 1.6 : b > 0.4 ? 1.1 : 0.7;
+    f.fillRect(x, y, s, s);
+  }
+  f.globalCompositeOperation = 'source-over';
+  twinkles = Array.from({length: Math.round(W*H/9000)}, () => ({
+    x: Math.random()*W, y: Math.random()*H, p: Math.random()*6.28, s: rnd(0.8, 2.2), f: rnd(1, 3)
+  }));
+}
+function drawSky(){
+  ctx.drawImage(skyCv, 0, 0, W, H);
+  ctx.globalCompositeOperation = 'lighter';
+  for(const t of twinkles){
+    const a = 0.35 + 0.65*Math.max(0, Math.sin(time*t.f + t.p));
+    ctx.fillStyle = `rgba(220,230,255,${a*0.8})`;
+    ctx.fillRect(t.x - t.s/2, t.y - t.s/2, t.s, t.s);
+    if(t.s > 1.8){ ctx.fillStyle = `rgba(200,220,255,${a*0.25})`; ctx.fillRect(t.x-3, t.y-0.4, 6, 0.8); ctx.fillRect(t.x-0.4, t.y-3, 0.8, 6); }
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/* ======================================================================
+   Planetas do sistema solar (texturas procedurais)
+   ====================================================================== */
+const PLANETS = {
+  mercurio: { r: 16, atmo: null },
+  venus:    { r: 24, atmo: 'rgba(255,230,170,0.6)' },
+  terra:    { r: 25, atmo: 'rgba(120,180,255,0.75)' },
+  marte:    { r: 19, atmo: 'rgba(255,160,120,0.35)' },
+  jupiter:  { r: 52, atmo: 'rgba(255,220,180,0.35)' },
+  saturno:  { r: 42, atmo: 'rgba(255,230,180,0.3)', rings: true },
+  urano:    { r: 30, atmo: 'rgba(170,240,255,0.5)' },
+  netuno:   { r: 29, atmo: 'rgba(110,150,255,0.55)' }
+};
+
+function planetColor(kind, lon, lat, seed){
+  const L = lat, A = lon;
+  switch(kind){
+    case 'mercurio': {
+      const n = fbm2(A*3, L*3, seed, 5);
+      return mix3([95,90,88], [175,168,160], n);
+    }
+    case 'venus': {
+      const w = fbm2(A*2, L*2, seed, 3);
+      const n = fbm2(A*1.5 + w*2, L*5 + w, seed+3, 4);
+      return mix3([200,150,80], [245,225,170], n);
+    }
+    case 'terra': {
+      const n = fbm2(A*1.6, L*1.9, seed, 5);
+      let c;
+      if(n > 0.54){
+        const d = fbm2(A*4, L*4, seed+7, 3);
+        c = mix3([55,110,45], [160,135,85], clamp((d-0.35)*2,0,1));
+      } else {
+        c = mix3([10,35,100], [30,90,170], clamp(n*1.6,0,1));
+      }
+      if(Math.abs(L) > 1.18) c = [235,240,250];
+      const cl = fbm2(A*2.5+5, L*4, seed+11, 4);
+      if(cl > 0.55) c = mix3(c, [250,250,255], clamp((cl-0.55)*3.5, 0, 0.9));
+      return c;
+    }
+    case 'marte': {
+      const n = fbm2(A*2.2, L*2.2, seed, 5);
+      let c = mix3([120,45,25], [205,105,60], n);
+      if(L < -1.2) c = [240,230,225];
+      return c;
+    }
+    case 'jupiter': {
+      const t = L*7 + (fbm2(A*2.5, L*8, seed, 4)-0.5)*2.2;
+      const pal = [[225,205,175],[185,135,95],[240,228,205],[160,105,75],[210,180,140]];
+      const i = Math.floor(((Math.sin(t)+1)/2)*4.999);
+      let c = mix3(pal[i], pal[(i+1)%5], (Math.sin(t*1.7)+1)/2*0.5);
+      const ex = (A-0.6)/0.45, ey = (L-0.38)/0.16;
+      const e = ex*ex + ey*ey;
+      if(e < 1) c = mix3(c, [200,95,60], clamp((1-e)*2,0,1));
+      return c;
+    }
+    case 'saturno': {
+      const t = L*9 + (fbm2(A*2, L*6, seed, 3)-0.5)*1.2;
+      return mix3([215,190,135], [240,222,175], (Math.sin(t)+1)/2);
+    }
+    case 'urano': {
+      const t = L*4 + (fbm2(A, L*3, seed, 3)-0.5);
+      return mix3([140,205,215], [175,230,235], (Math.sin(t)+1)/2*0.6);
+    }
+    case 'netuno': {
+      const t = L*6 + (fbm2(A*2, L*5, seed, 3)-0.5)*1.5;
+      let c = mix3([40,70,180], [80,120,225], (Math.sin(t)+1)/2);
+      const ex = (A+0.5)/0.3, ey = (L+0.35)/0.13;
+      if(ex*ex+ey*ey < 1) c = [25,40,120];
+      return c;
+    }
+  }
+  return [128,128,128];
+}
+
+function makePlanetTexture(kind, r){
+  const sc = 2, size = Math.ceil(2*r*sc), c = document.createElement('canvas');
+  c.width = c.height = size;
+  const p = c.getContext('2d'), img = p.createImageData(size, size), d = img.data;
+  const seed = (Math.random()*1000)|0;
+  for(let y=0;y<size;y++) for(let x=0;x<size;x++){
+    const nx = (x+0.5)/size*2-1, ny = (y+0.5)/size*2-1, r2 = nx*nx+ny*ny;
+    if(r2 > 1) continue;
+    const nz = Math.sqrt(1-r2);
+    const lat = Math.asin(ny), lon = Math.atan2(nx, nz);
+    const col = planetColor(kind, lon, lat, seed);
+    const limb = 0.55 + 0.45*Math.pow(nz, 0.5);
+    const i = (y*size+x)*4;
+    d[i] = col[0]*limb; d[i+1] = col[1]*limb; d[i+2] = col[2]*limb;
+    d[i+3] = r2 > 0.985 ? 255*clamp((1-r2)/0.015,0,1) : 255;
+  }
+  p.putImageData(img, 0, 0);
+  if(kind === 'mercurio' || kind === 'marte'){
+    // crateras
+    p.save(); p.beginPath(); p.arc(size/2,size/2,size/2,0,Math.PI*2); p.clip();
+    for(let i=0;i<(kind==='mercurio'?18:6);i++){
+      const cx = rnd(0.15,0.85)*size, cy = rnd(0.15,0.85)*size, cr = rnd(0.03,0.1)*size;
+      p.fillStyle = 'rgba(0,0,0,0.25)'; p.beginPath(); p.arc(cx,cy,cr,0,Math.PI*2); p.fill();
+      p.strokeStyle = 'rgba(255,255,255,0.15)'; p.lineWidth = 1; p.beginPath(); p.arc(cx-0.5,cy-0.5,cr,Math.PI*0.9,Math.PI*1.9); p.stroke();
+    }
+    p.restore();
+  }
+  return c;
+}
+
+/* ======================================================================
+   Rochas espaciais e lixo espacial (texturas + polígonos de recorte)
+   ====================================================================== */
+const rectPoly = (x, y, w, h) => [[x,y],[x+w,y],[x+w,y+h],[x,y+h]];
+function tracePolys(c, polys, k = 1){
+  c.beginPath();
+  for(const poly of polys){
+    c.moveTo(poly[0][0]*k, poly[0][1]*k);
+    for(let i=1;i<poly.length;i++) c.lineTo(poly[i][0]*k, poly[i][1]*k);
+    c.closePath();
+  }
+}
+function makeBodyCanvas(half){
+  const sc = 2, c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(2*half*sc);
+  const p = c.getContext('2d'); p.setTransform(sc,0,0,sc,half*sc,half*sc);
+  return [c, p];
+}
+
+function makeAsteroid(r){
+  const n = 14, seed = (Math.random()*1000)|0, poly = [];
+  for(let i=0;i<n;i++){
+    const a = i/n*Math.PI*2, k = 0.72 + 0.4*fbm2(Math.cos(a)*1.5+3, Math.sin(a)*1.5+3, seed, 3);
+    poly.push([Math.cos(a)*r*k, Math.sin(a)*r*k]);
+  }
+  const half = r*1.3, [c, p] = makeBodyCanvas(half);
+  tracePolys(p, [poly]); p.save(); p.clip();
+  const base = Math.random() < 0.5 ? [120,108,96] : [96,92,98];
+  const g = p.createRadialGradient(-r*0.2,-r*0.2,0,0,0,r*1.2);
+  g.addColorStop(0, `rgb(${base[0]+30},${base[1]+28},${base[2]+25})`);
+  g.addColorStop(1, `rgb(${base[0]-50},${base[1]-48},${base[2]-45})`);
+  p.fillStyle = g; p.fillRect(-half,-half,2*half,2*half);
+  for(let i=0;i<r*3;i++){
+    p.fillStyle = Math.random()<0.5 ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.07)';
+    p.beginPath(); p.arc(rnd(-r,r), rnd(-r,r), rnd(0.5, r*0.12), 0, Math.PI*2); p.fill();
+  }
+  for(let i=0;i<4+r/8;i++){
+    const cx = rnd(-r*0.7,r*0.7), cy = rnd(-r*0.7,r*0.7), cr = rnd(r*0.06, r*0.2);
+    p.fillStyle = 'rgba(0,0,0,0.3)'; p.beginPath(); p.arc(cx,cy,cr,0,Math.PI*2); p.fill();
+    p.strokeStyle = 'rgba(255,255,255,0.12)'; p.lineWidth = 1;
+    p.beginPath(); p.arc(cx-0.6,cy-0.6,cr,Math.PI*0.9,Math.PI*1.9); p.stroke();
+  }
+  p.restore();
+  return { polys: [poly], tex: c, half, cr: r*0.88 };
+}
+
+function makeJunk(r){
+  const type = ['satelite','foguete','destroco'][(Math.random()*3)|0];
+  let polys, half = r*1.15;
+  const [c, p] = makeBodyCanvas(half);
+  if(type === 'satelite'){
+    const body = rectPoly(-r*0.28,-r*0.28,r*0.56,r*0.56);
+    const pl = rectPoly(-r*1.0,-r*0.2,r*0.62,r*0.4), pr = rectPoly(r*0.38,-r*0.2,r*0.62,r*0.4);
+    const arm = rectPoly(-r*0.4,-r*0.03,r*0.8,r*0.06);
+    polys = [body, pl, pr, arm];
+    p.fillStyle = '#8a8f99'; tracePolys(p,[arm]); p.fill();
+    for(const pan of [pl, pr]){
+      p.fillStyle = '#1d2f63'; tracePolys(p,[pan]); p.fill();
+      p.strokeStyle = 'rgba(140,170,230,0.6)'; p.lineWidth = 0.6;
+      const x0 = pan[0][0], y0 = pan[0][1], w = pan[1][0]-x0, h = pan[2][1]-y0;
+      for(let i=1;i<5;i++){ p.beginPath(); p.moveTo(x0+w*i/5,y0); p.lineTo(x0+w*i/5,y0+h); p.stroke(); }
+      p.beginPath(); p.moveTo(x0,y0+h/2); p.lineTo(x0+w,y0+h/2); p.stroke();
+    }
+    const g = p.createLinearGradient(-r*0.28,-r*0.28,r*0.28,r*0.28);
+    g.addColorStop(0,'#f0d27a'); g.addColorStop(0.5,'#b8892e'); g.addColorStop(1,'#e8c060');
+    p.fillStyle = g; tracePolys(p,[body]); p.fill();
+    p.strokeStyle = 'rgba(90,60,10,0.6)'; p.lineWidth = 0.7;
+    for(let i=0;i<5;i++){ p.beginPath(); p.moveTo(rnd(-r*0.28,r*0.28),-r*0.28); p.lineTo(rnd(-r*0.28,r*0.28),r*0.28); p.stroke(); }
+    p.fillStyle = '#ddd'; p.beginPath(); p.arc(0,0,r*0.12,0,Math.PI*2); p.fill();
+  } else if(type === 'foguete'){
+    const tube = rectPoly(-r*0.85,-r*0.3,r*1.6,r*0.6);
+    const noz = [[-r*0.85,-r*0.22],[-r*1.1,-r*0.36],[-r*1.1,r*0.36],[-r*0.85,r*0.22]];
+    polys = [tube, noz];
+    const g = p.createLinearGradient(0,-r*0.3,0,r*0.3);
+    g.addColorStop(0,'#f4f4f4'); g.addColorStop(0.5,'#c9cbd0'); g.addColorStop(1,'#8d9098');
+    p.fillStyle = g; tracePolys(p,[tube]); p.fill();
+    p.fillStyle = '#3b3e46'; tracePolys(p,[noz]); p.fill();
+    p.fillStyle = '#b5332b'; p.fillRect(-r*0.4,-r*0.3,r*0.12,r*0.6); p.fillRect(r*0.45,-r*0.3,r*0.08,r*0.6);
+    p.fillStyle = '#222'; p.fillRect(r*0.1,-r*0.3,r*0.05,r*0.6);
+  } else {
+    const n = 7, poly = [];
+    for(let i=0;i<n;i++){ const a = i/n*Math.PI*2; const k = rnd(0.5,1); poly.push([Math.cos(a)*r*k, Math.sin(a)*r*k*0.55]); }
+    polys = [poly];
+    tracePolys(p, polys); p.save(); p.clip();
+    const g = p.createLinearGradient(-r,-r*0.5,r,r*0.5);
+    g.addColorStop(0,'#a8acb4'); g.addColorStop(0.5,'#6b7079'); g.addColorStop(1,'#b9bcc2');
+    p.fillStyle = g; p.fillRect(-r,-r,2*r,2*r);
+    p.strokeStyle = 'rgba(30,30,35,0.6)'; p.lineWidth = 0.8;
+    for(let i=-3;i<=3;i++){ p.beginPath(); p.moveTo(i*r*0.25,-r); p.lineTo(i*r*0.25+r*0.2,r); p.stroke(); }
+    p.fillStyle = 'rgba(255,255,255,0.5)';
+    for(let i=0;i<8;i++){ p.beginPath(); p.arc(rnd(-r*0.6,r*0.6), rnd(-r*0.25,r*0.25), 0.9, 0, Math.PI*2); p.fill(); }
+    p.restore();
+  }
+  return { polys, tex: c, half, cr: r*0.8, junkType: type };
+}
+
+/* ======================================================================
+   Criação e posicionamento dos corpos
+   ====================================================================== */
+function sizeScale(){ return clamp(Math.min(W, H)/800, 0.6, 1.2); }
+
+// raio de “espaço ocupado” usado para não sobrepor corpos
+function footprint(o){
+  if(o.kind === 'planet') return o.rings ? o.r*2.2 : o.r;
+  if(o.kind === 'hole') return o.r*2.6;
+  if(o.kind === 'star') return o.r*1.6;
+  return o.half;
+}
+function allBodies(){ return obstacles.concat(stars, holes); }
+
+function findSpot(fp){
+  for(let tries=0; tries<250; tries++){
+    const x = rnd(fp+20, W-fp-20), y = rnd(fp+20, H-fp-20);
+    if(!(x > 0 && y > 0)) continue;
+    if(Math.hypot(x-ball.x, y-ball.y) < fp + ball.R + 110) continue;
+    let ok = true;
+    for(const b of allBodies()){
+      if(Math.hypot(x-b.x, y-b.y) < fp + footprint(b) + ball.R*2 + 12){ ok = false; break; }
+    }
+    if(ok) return [x, y];
+  }
+  return null;
+}
+
+function newObstacle(){
+  const used = new Set(obstacles.filter(o => o.kind==='planet').map(o => o.name));
+  const free = Object.keys(PLANETS).filter(n => !used.has(n));
+  const roll = Math.random(), sc = sizeScale();
+  let o;
+  if(roll < 0.38 && free.length){
+    const name = free[(Math.random()*free.length)|0], P = PLANETS[name], r = P.r*sc;
+    o = { kind:'planet', name, r, cr: r, rings: !!P.rings, atmo: P.atmo, tilt: rnd(-0.6,0.6) };
+  } else if(roll < 0.75){
+    const r = rnd(16, 42)*sc;
+    o = Object.assign({ kind:'rock', r }, makeAsteroid(r));
+  } else {
+    const r = rnd(20, 34)*sc;
+    o = Object.assign({ kind:'junk', r }, makeJunk(r));
+  }
+  const spot = findSpot(footprint(o));
+  if(!spot) return null;
+  [o.x, o.y] = spot;
+  o.ang = rnd(0, Math.PI*2); o.spin = o.kind === 'planet' ? 0 : rnd(-0.5, 0.5) * (o.kind === 'junk' ? 1.6 : 1);
+  if(o.kind === 'planet') o.tex = makePlanetTexture(o.name, o.r);
+  return o;
+}
+
+const STAR_TYPES = [
+  { name:'anã vermelha', core:[255,200,170], col:[255,90,60] },
+  { name:'gigante azul', core:[230,240,255], col:[110,160,255] },
+  { name:'anã branca',   core:[255,255,255], col:[200,220,255] },
+  { name:'estrela amarela', core:[255,250,225], col:[255,210,120] }
+];
+function newHazard(isHole){
+  const sc = sizeScale();
+  let o;
+  if(isHole){
+    const r = rnd(13, 20)*sc;
+    o = { kind:'hole', r, infl: r*8, drainR: r*2.4, spinPh: rnd(0,6.28) };
+  } else {
+    const r = rnd(11, 20)*sc, t = STAR_TYPES[(Math.random()*STAR_TYPES.length)|0];
+    o = { kind:'star', r, cr: r, type: t, cd: 0, ph: rnd(0,6.28) };
+  }
+  const spot = findSpot(footprint(o));
+  if(!spot) return null;
+  [o.x, o.y] = spot;
+  return o;
+}
+
+function syncWorld(regen){
+  if(regen){ obstacles = []; stars = []; holes = []; }
+  while(obstacles.length > params.count) obstacles.pop();
+  for(let g=0; obstacles.length < params.count && g < 40; g++){ const o = newObstacle(); if(o) obstacles.push(o); }
+  // estrelas e buracos negros alternados
+  const want = params.hazards;
+  while(stars.length + holes.length > want){
+    if(holes.length >= stars.length && holes.length) holes.pop(); else stars.pop();
+  }
+  for(let g=0; stars.length + holes.length < want && g < 30; g++){
+    const isHole = holes.length < stars.length;
+    const o = newHazard(isHole); if(o) (isHole ? holes : stars).push(o);
+  }
+}
+
+/* ======================================================================
+   Desenho dos corpos
+   ====================================================================== */
+function sunDir(x, y){
+  const dx = ball.x-x, dy = ball.y-y, d = Math.hypot(dx,dy) || 1;
+  return [dx/d, dy/d, d];
+}
+function shade(c, ux, uy, r){
+  const g = c.createLinearGradient(ux*r, uy*r, -ux*r, -uy*r);
+  g.addColorStop(0, 'rgba(255,215,160,0.22)');
+  g.addColorStop(0.35, 'rgba(0,0,0,0)');
+  g.addColorStop(0.62, 'rgba(0,0,10,0.55)');
+  g.addColorStop(1, 'rgba(0,0,10,0.93)');
+  c.fillStyle = g; c.fillRect(-r*1.3, -r*1.3, r*2.6, r*2.6);
+}
+function drawRings(o, back){
+  ctx.save(); ctx.translate(o.x, o.y); ctx.rotate(o.tilt);
+  const bands = [[1.3,1.5,'rgba(190,170,130,0.45)'],[1.52,1.85,'rgba(225,205,160,0.75)'],
+                 [1.9,1.98,'rgba(150,130,100,0.25)'],[2.0,2.18,'rgba(205,185,145,0.5)']];
+  const k = 0.32;
+  for(const [a,b,c] of bands){
+    const rm = (a+b)/2*o.r;
+    ctx.strokeStyle = c; ctx.lineWidth = (b-a)*o.r*k*1.6 + 1;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rm, rm*k, 0, back ? Math.PI : 0, back ? Math.PI*2 : Math.PI);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawPlanet(o){
+  const [ux, uy] = sunDir(o.x, o.y);
+  if(o.rings) drawRings(o, true);
+  ctx.drawImage(o.tex, o.x-o.r, o.y-o.r, 2*o.r, 2*o.r);
+  ctx.save(); ctx.translate(o.x, o.y);
+  ctx.beginPath(); ctx.arc(0,0,o.r,0,Math.PI*2); ctx.clip();
+  shade(ctx, ux, uy, o.r);
+  ctx.restore();
+  if(o.atmo){
+    const a = Math.atan2(uy, ux);
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = o.atmo; ctx.lineWidth = 2.2;
+    ctx.beginPath(); ctx.arc(o.x, o.y, o.r+0.6, a-1.25, a+1.25); ctx.stroke();
+    ctx.restore();
+  }
+  if(o.rings) drawRings(o, false);
+}
+function drawBody(o){
+  const [ux, uy] = sunDir(o.x, o.y);
+  const ca = Math.cos(-o.ang), sa = Math.sin(-o.ang);
+  const lx = ux*ca - uy*sa, ly = ux*sa + uy*ca;
+  ctx.save(); ctx.translate(o.x, o.y); ctx.rotate(o.ang);
+  ctx.drawImage(o.tex, -o.half, -o.half, 2*o.half, 2*o.half);
+  tracePolys(ctx, o.polys); ctx.clip();
+  shade(ctx, lx, ly, o.half);
+  ctx.restore();
+}
+function drawObstacles(){
+  for(const o of obstacles) (o.kind === 'planet' ? drawPlanet : drawBody)(o);
+}
+
+function drawStars(){
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for(const s of stars){
+    const t = s.type, pul = 1 + 0.08*Math.sin(time*3 + s.ph) + (s.cd > 0 ? s.cd : 0);
+    const R = s.r*pul;
+    const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, R*4.5);
+    g.addColorStop(0, `rgba(${t.col[0]},${t.col[1]},${t.col[2]},0.55)`);
+    g.addColorStop(0.25, `rgba(${t.col[0]},${t.col[1]},${t.col[2]},0.18)`);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(s.x-R*4.5, s.y-R*4.5, R*9, R*9);
+    const c = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, R);
+    c.addColorStop(0, '#fff');
+    c.addColorStop(0.5, `rgb(${t.core[0]},${t.core[1]},${t.core[2]})`);
+    c.addColorStop(1, `rgba(${t.col[0]},${t.col[1]},${t.col[2]},0.2)`);
+    ctx.fillStyle = c; ctx.beginPath(); ctx.arc(s.x, s.y, R, 0, Math.PI*2); ctx.fill();
+    // raios de difração
+    ctx.strokeStyle = `rgba(${t.core[0]},${t.core[1]},${t.core[2]},0.35)`; ctx.lineWidth = 1.2;
+    const L = R*(3.2 + 0.4*Math.sin(time*2+s.ph));
+    ctx.beginPath(); ctx.moveTo(s.x-L, s.y); ctx.lineTo(s.x+L, s.y); ctx.moveTo(s.x, s.y-L); ctx.lineTo(s.x, s.y+L); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawHoles(){
+  for(const h of holes){
+    ctx.save();
+    // lente gravitacional / brilho
+    ctx.globalCompositeOperation = 'lighter';
+    const g = ctx.createRadialGradient(h.x, h.y, h.r, h.x, h.y, h.r*4);
+    g.addColorStop(0, 'rgba(255,170,90,0.35)'); g.addColorStop(0.4, 'rgba(150,80,220,0.10)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(h.x-h.r*4, h.y-h.r*4, h.r*8, h.r*8);
+    // disco de acreção (rotação kepleriana: interno gira mais rápido)
+    ctx.translate(h.x, h.y); ctx.scale(1, 0.55); ctx.lineCap = 'round';
+    for(let i=0;i<30;i++){
+      const rr = h.r*(1.25 + (i%10)/10*1.4);
+      const sp = 2.4 / Math.pow(rr/h.r, 1.5);
+      const a0 = h.spinPh + time*sp + i*2.39;
+      const hot = 1 - (i%10)/10;
+      ctx.strokeStyle = `rgba(255,${120+120*hot|0},${40+140*hot*hot|0},${0.25+0.45*hot})`;
+      ctx.lineWidth = 1.2 + 2*hot;
+      ctx.beginPath(); ctx.arc(0, 0, rr, a0, a0 + 0.7 + hot*0.6); ctx.stroke();
+    }
+    ctx.restore();
+    // horizonte de eventos + anel de fótons
+    ctx.save();
+    ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(h.x, h.y, h.r, 0, Math.PI*2); ctx.fill();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = 'rgba(255,215,170,0.85)'; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.arc(h.x, h.y, h.r+0.8, 0, Math.PI*2); ctx.stroke();
+    // frente do disco passando na frente do buraco
+    ctx.translate(h.x, h.y); ctx.scale(1, 0.55);
+    ctx.strokeStyle = 'rgba(255,190,120,0.5)'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(0, 0, h.r*1.5, 0.15, Math.PI-0.15); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Alternativa em Canvas 2D (sem WebGL, ou se o WebGL renderizar errado)
+   ---------------------------------------------------------------------- */
+const plasmaCv = document.createElement('canvas');
+(function buildPlasma(){
+  const N = 256; plasmaCv.width = plasmaCv.height = N;
+  const p = plasmaCv.getContext('2d'), img = p.createImageData(N, N), d = img.data;
+  // ruído de valor periódico (tileável) com várias oitavas
+  const G = 128, grid = new Float32Array(G*G).map(() => Math.random());
+  const val = (x, y, f) => {
+    const gx = x*f, gy = y*f, ix = Math.floor(gx), iy = Math.floor(gy);
+    const fx = gx-ix, fy = gy-iy, sx = fx*fx*(3-2*fx), sy = fy*fy*(3-2*fy);
+    const P = Math.round(f*N);               // período em células (<= G)
+    const g = (i, j) => grid[((j%P+P)%P) * G + ((i%P+P)%P)];
+    const a = g(ix,iy), b = g(ix+1,iy), c = g(ix,iy+1), e = g(ix+1,iy+1);
+    return a + (b-a)*sx + (c-a)*sy + (a-b-c+e)*sx*sy;
+  };
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++){
+    let v=0, amp=0.5, f=8/N;
+    for(let o=0;o<5;o++){ v += amp*val(x,y,f); amp*=0.5; f*=2; }
+    v = Math.min(1, Math.max(0, (v-0.2)/0.75));
+    const i=(y*N+x)*4;
+    d[i]   = 255;
+    d[i+1] = 90 + 160*v;
+    d[i+2] = 10 + 150*v*v*v;
+    d[i+3] = 255;
+  }
+  p.putImageData(img,0,0);
+})();
+
+function flameNoise(a, t){
+  return 0.5 + 0.25*Math.sin(a*5 + t*2.1) + 0.15*Math.sin(a*11 - t*3.7) + 0.1*Math.sin(a*23 + t*5.3);
+}
+
+function drawSun2D(){
+  const R = ball.R, x = ball.x, y = ball.y, t = time;
+  const s = Math.hypot(ball.vx, ball.vy), vx = s>1 ? ball.vx/s : 0, vy = s>1 ? ball.vy/s : 0;
+  const vs = Math.min(1, s/320);
+
+  // labaredas (atrás do disco)
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const n = 48;
+  for(let i=0;i<n;i++){
+    const a = i/n*Math.PI*2 + t*0.05;
+    const dx = Math.cos(a), dy = Math.sin(a);
+    const back = Math.max(0, -(dx*vx + dy*vy))*vs;
+    const L = R*(0.18 + 0.45*Math.pow(flameNoise(a, t), 3) + 0.9*back*flameNoise(a*1.7, t*1.3));
+    const w = 0.09 + 0.05*Math.sin(a*7+t);
+    const bx = x + dx*R*0.92, by = y + dy*R*0.92;
+    const tx = x + dx*(R+L), ty = y + dy*(R+L);
+    const g = ctx.createRadialGradient(bx, by, 0, bx, by, L+R*0.1);
+    g.addColorStop(0, 'rgba(255,200,90,0.55)');
+    g.addColorStop(0.5, 'rgba(255,100,20,0.25)');
+    g.addColorStop(1, 'rgba(200,30,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(a-w)*R*0.9, y + Math.sin(a-w)*R*0.9);
+    ctx.quadraticCurveTo(x + Math.cos(a-w*0.4)*(R+L*0.6), y + Math.sin(a-w*0.4)*(R+L*0.6), tx, ty);
+    ctx.quadraticCurveTo(x + Math.cos(a+w*0.4)*(R+L*0.6), y + Math.sin(a+w*0.4)*(R+L*0.6),
+                         x + Math.cos(a+w)*R*0.9, y + Math.sin(a+w)*R*0.9);
+    ctx.closePath(); ctx.fill();
+  }
+  // coroa suave
+  const cg = ctx.createRadialGradient(x, y, R*0.9, x, y, R*2.2);
+  cg.addColorStop(0, 'rgba(255,170,60,0.6)');
+  cg.addColorStop(1, 'rgba(255,60,0,0)');
+  ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(x, y, R*2.2, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+
+  // disco com plasma em movimento
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI*2); ctx.clip();
+  const size = R*4.2;
+  const ox = (t*9 + rollX) % size, oy = (t*5 + rollY) % size;
+  ctx.globalAlpha = 1;
+  for(let i=-1;i<=1;i++) for(let j=-1;j<=1;j++)
+    ctx.drawImage(plasmaCv, x - size/2 - ox + i*size, y - size/2 - oy + j*size, size, size);
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = 0.45;
+  const size2 = R*2.6, ox2 = (-t*14 + rollX*1.3) % size2, oy2 = (t*11 + rollY*1.3) % size2;
+  for(let i=-1;i<=2;i++) for(let j=-1;j<=2;j++)
+    ctx.drawImage(plasmaCv, x - size2 - ox2 + i*size2, y - size2 - oy2 + j*size2, size2, size2);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  // centro mais quente
+  const hg = ctx.createRadialGradient(x - R*0.15, y - R*0.15, 0, x, y, R);
+  hg.addColorStop(0, 'rgba(255,250,220,0.75)');
+  hg.addColorStop(0.55, 'rgba(255,220,140,0.15)');
+  hg.addColorStop(1, 'rgba(255,200,120,0)');
+  ctx.fillStyle = hg; ctx.fillRect(x-R, y-R, 2*R, 2*R);
+  // escurecimento de borda
+  const lg = ctx.createRadialGradient(x, y, R*0.35, x, y, R);
+  lg.addColorStop(0, 'rgba(120,20,0,0)');
+  lg.addColorStop(0.75, 'rgba(150,30,0,0.25)');
+  lg.addColorStop(1, 'rgba(110,10,0,0.75)');
+  ctx.fillStyle = lg; ctx.fillRect(x-R, y-R, 2*R, 2*R);
+  ctx.restore();
+}
+
+
+/* ======================================================================
+   Massa do sol
+   ====================================================================== */
+function floatText(txt, col, x, y){
+  texts.push({ x: clamp(x ?? ball.x, 50, W-50), y: clamp(y ?? (ball.y - ball.R - 12), 20, H-10), txt, col, life: 0, max: 1.5 });
+}
+function setMass(m){
+  S.mass = clamp(m, 0, MAX_MASS);
+  ball.R = radiusFromMass(Math.max(MIN_MASS, S.mass));
+  if(S.mass < MIN_MASS && !S.over) gameOver();
+}
+function changeMass(dm, label = true){
+  if(S.over) return;
+  setMass(S.mass + dm);
+  if(label) floatText((dm > 0 ? '+' : '') + dm.toFixed(1) + ' massa', dm > 0 ? '#7be0a0' : '#ff7b6b');
+}
+
+/* ======================================================================
+   Partículas e efeitos
+   ====================================================================== */
+function spawnEmbers(dt){
+  let n = (50 + ball.R*1.5)*dt;
+  while(n > 0){
+    if(Math.random() < n){
+      const a = Math.random()*Math.PI*2, r = ball.R*(0.9+Math.random()*0.25), sp = 15+Math.random()*35;
+      embers.push({ x: ball.x+Math.cos(a)*r, y: ball.y+Math.sin(a)*r,
+        vx: Math.cos(a)*sp - ball.vx*0.25 + rnd(-10,10), vy: Math.sin(a)*sp - ball.vy*0.25 + rnd(-10,10),
+        life: 0, max: rnd(0.5, 1.6), size: rnd(0.8, 3) });
+    }
+    n -= 1;
+  }
+}
+function spawnSparks(x, y, nx, ny, impact){
+  const count = Math.min(40, 6 + impact/8 | 0);
+  for(let i=0;i<count;i++){
+    const a = Math.atan2(ny,nx) + (Math.random()-0.5)*2.4, sp = impact*(0.5+Math.random()*1.4) + 60;
+    sparks.push({ x, y, vx: Math.cos(a)*sp, vy: Math.sin(a)*sp, life: 0, max: rnd(0.25, 0.7) });
+  }
+}
+function explode(x, y, size, cols){
+  flashes.push({ x, y, r: size*2.8, life: 0, max: 0.55 });
+  const n = Math.min(120, 20 + size*2.5 | 0);
+  for(let i=0;i<n;i++){
+    const a = Math.random()*Math.PI*2, sp = rnd(0.3, 1)*size*7;
+    debris.push({ x, y, vx: Math.cos(a)*sp, vy: Math.sin(a)*sp, life: 0, max: rnd(0.5, 1.4),
+      col: cols[(Math.random()*cols.length)|0], size: rnd(1, 2.8) });
+  }
+}
+// partículas que viajam de um ponto até um alvo (transferência de massa)
+function stream(x, y, tgt, n, col, spread = 10){
+  for(let i=0;i<n;i++){
+    const a = Math.random()*Math.PI*2;
+    streams.push({ x: x + rnd(-spread,spread), y: y + rnd(-spread,spread), vx: Math.cos(a)*rnd(20,90), vy: Math.sin(a)*rnd(20,90),
+      tgt, col, life: 0, max: 2.5, size: rnd(1.2, 2.6) });
+  }
+}
+function updateParticles(dt){
+  for(const p of embers){ p.life+=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=0.98; p.vy*=0.98; }
+  embers = embers.filter(p => p.life < p.max);
+  for(const p of sparks){ p.life+=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=0.93; p.vy*=0.93; }
+  sparks = sparks.filter(p => p.life < p.max);
+  for(const p of debris){ p.life+=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=0.95; p.vy*=0.95; }
+  debris = debris.filter(p => p.life < p.max);
+  for(const p of streams){
+    p.life += dt;
+    const dx = p.tgt.x - p.x, dy = p.tgt.y - p.y, d = Math.hypot(dx,dy) || 1;
+    p.vx += dx/d*1100*dt; p.vy += dy/d*1100*dt; p.vx *= 0.94; p.vy *= 0.94;
+    p.x += p.vx*dt; p.y += p.vy*dt;
+    const tr = p.tgt === ball ? ball.R*0.7 : p.tgt.r;
+    if(d < tr) p.life = p.max;
+  }
+  streams = streams.filter(p => p.life < p.max);
+  for(const f of flashes) f.life += dt;
+  flashes = flashes.filter(f => f.life < f.max);
+  for(const t of texts){ t.life += dt; t.y -= 22*dt; }
+  texts = texts.filter(t => t.life < t.max);
+}
+function drawParticles(){
+  ctx.globalCompositeOperation = 'lighter';
+  for(const p of embers){
+    const t = p.life/p.max;
+    ctx.fillStyle = `rgba(255,${200-150*t|0},${80-70*t|0},${(1-t)*0.85})`;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size*(1-t*0.5), 0, Math.PI*2); ctx.fill();
+  }
+  for(const p of streams){
+    const a = Math.min(1, (p.max - p.life)*2);
+    ctx.fillStyle = p.col.replace('A', a.toFixed(2));
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill();
+  }
+  for(const p of debris){
+    const t = p.life/p.max;
+    ctx.globalAlpha = 1 - t; ctx.fillStyle = p.col;
+    ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+  ctx.lineCap = 'round';
+  for(const p of sparks){
+    const t = p.life/p.max;
+    ctx.strokeStyle = `rgba(255,${230-120*t|0},${140-120*t|0},${1-t})`;
+    ctx.lineWidth = 1.6*(1-t)+0.4;
+    ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x-p.vx*0.03,p.y-p.vy*0.03); ctx.stroke();
+  }
+  for(const f of flashes){
+    const t = f.life/f.max, r = f.r*(0.3 + 0.7*Math.sqrt(t));
+    const g = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, r);
+    g.addColorStop(0, `rgba(255,250,230,${0.9*(1-t)})`);
+    g.addColorStop(0.4, `rgba(255,170,80,${0.5*(1-t)})`);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(f.x-r, f.y-r, 2*r, 2*r);
+    ctx.strokeStyle = `rgba(255,220,180,${0.6*(1-t)})`; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(f.x, f.y, r*0.9, 0, Math.PI*2); ctx.stroke();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.font = 'bold 13px system-ui,sans-serif'; ctx.textAlign = 'center';
+  for(const t of texts){
+    ctx.globalAlpha = 1 - t.life/t.max; ctx.fillStyle = t.col;
+    ctx.fillText(t.txt, t.x, t.y);
+  }
+  ctx.globalAlpha = 1; ctx.textAlign = 'start';
+}
+
+/* ======================================================================
+   Naves (dão massa ao serem atingidas)
+   ====================================================================== */
+const SHIP_COLS = ['#d9473f','#3f8bd9','#3fd98a','#d9b03f','#b05ad9'];
+function spawnShip(){
+  const sc = sizeScale(), r = rnd(10, 15)*sc;
+  let x = 0, y = 0;
+  for(let t=0;t<30;t++){
+    const e = (Math.random()*4)|0;
+    x = e===0 ? 30 : e===1 ? W-30 : rnd(30, W-30);
+    y = e===2 ? 30 : e===3 ? H-30 : rnd(30, H-30);
+    if(Math.hypot(x-ball.x, y-ball.y) > 280) break;
+  }
+  ships.push({ x, y, vx: 0, vy: 0, a: 0, r, wa: Math.atan2(H/2-y, W/2-x), speed: rnd(60, 95),
+    col: SHIP_COLS[(Math.random()*SHIP_COLS.length)|0], ph: rnd(0, 6.28) });
+}
+function updateShips(dt){
+  if(ships.length < params.ships){
+    S.shipTimer -= dt;
+    if(S.shipTimer <= 0){ spawnShip(); S.shipTimer = 2.5; }
+  }
+  while(ships.length > params.ships) ships.pop();
+  for(const s of ships){
+    s.wa += (Math.random()-0.5)*dt*2.5;
+    let dx = Math.cos(s.wa)*s.speed, dy = Math.sin(s.wa)*s.speed;
+    const ex = s.x-ball.x, ey = s.y-ball.y, d = Math.hypot(ex, ey) || 1, fr = 190 + ball.R*2;
+    if(d < fr){ const k = (1 - d/fr)*s.speed*2.4; dx += ex/d*k; dy += ey/d*k; }   // foge do sol
+    for(const h of holes){
+      const hx = s.x-h.x, hy = s.y-h.y, hd = Math.hypot(hx, hy) || 1;
+      if(hd < h.infl*0.5){ dx += hx/hd*90; dy += hy/hd*90; }
+    }
+    const m = 70;
+    if(s.x < m) dx += (m-s.x)*3;  if(s.x > W-m) dx -= (s.x-(W-m))*3;
+    if(s.y < m) dy += (m-s.y)*3;  if(s.y > H-m) dy -= (s.y-(H-m))*3;
+    s.vx += (dx - s.vx)*Math.min(1, dt*1.8); s.vy += (dy - s.vy)*Math.min(1, dt*1.8);
+    s.x += s.vx*dt; s.y += s.vy*dt;
+    s.x = clamp(s.x, 5, W-5); s.y = clamp(s.y, 5, H-5);
+    if(Math.hypot(s.vx, s.vy) > 5) s.a = Math.atan2(s.vy, s.vx);
+    if(Math.hypot(s.x-ball.x, s.y-ball.y) < ball.R + s.r*0.8) s.dead = true;
+  }
+  for(const s of ships.filter(s => s.dead)){
+    explode(s.x, s.y, s.r*1.3, ['#ffffff','#ffd27a','#ff7a2e','#8fd3ff']);
+    stream(s.x, s.y, ball, 22, 'rgba(160,255,190,A)');
+    changeMass(+1.5);
+    S.shipsKilled++; S.shipTimer = Math.max(S.shipTimer, 2.5);
+  }
+  ships = ships.filter(s => !s.dead);
+}
+function drawShip(s){
+  const k = s.r/14;
+  ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(s.a); ctx.scale(k, k);
+  // chama do motor
+  ctx.globalCompositeOperation = 'lighter';
+  const fl = 8 + Math.random()*7;
+  const fg = ctx.createLinearGradient(-7,0,-7-fl,0);
+  fg.addColorStop(0,'rgba(170,230,255,0.95)'); fg.addColorStop(1,'rgba(60,120,255,0)');
+  ctx.fillStyle = fg; ctx.beginPath(); ctx.moveTo(-7,-3); ctx.lineTo(-7-fl,0); ctx.lineTo(-7,3); ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+  // asas
+  ctx.fillStyle = s.col;
+  ctx.beginPath(); ctx.moveTo(3,-3); ctx.lineTo(-6,-12); ctx.lineTo(-10,-11); ctx.lineTo(-6,-3); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(3,3); ctx.lineTo(-6,12); ctx.lineTo(-10,11); ctx.lineTo(-6,3); ctx.closePath(); ctx.fill();
+  // casco
+  const hg = ctx.createLinearGradient(0,-5,0,5);
+  hg.addColorStop(0,'#e8ecf2'); hg.addColorStop(0.5,'#9aa2b0'); hg.addColorStop(1,'#4c525e');
+  ctx.fillStyle = hg;
+  ctx.beginPath(); ctx.moveTo(16,0); ctx.lineTo(5,-4.5); ctx.lineTo(-8,-4); ctx.lineTo(-8,4); ctx.lineTo(5,4.5); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 0.6; ctx.stroke();
+  // cabine
+  ctx.fillStyle = '#7fd8ff'; ctx.beginPath(); ctx.ellipse(6,0,3.6,1.9,0,0,Math.PI*2); ctx.fill();
+  // luzes de navegação
+  if(Math.sin(time*6 + s.ph) > 0.3){
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = '#ff4040'; ctx.beginPath(); ctx.arc(-9,-11,1.6,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#40ff70'; ctx.beginPath(); ctx.arc(-9,11,1.6,0,Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* ======================================================================
+   Artilharia interestelar (chefe: 4 golpes para destruir)
+   ====================================================================== */
+const BOLT_SPEED = 240;
+function spawnBoss(){
+  const sc = sizeScale(), r = 72*sc;
+  const fromRight = ball.x < W/2;
+  const x = fromRight ? W + r*1.6 : -r*1.6, y = H*rnd(0.25, 0.75);
+  bosses.push({ x, y, vx: 0, vy: 0, r, hp: BOSS_HP, a: fromRight ? Math.PI : 0,
+    fireT: 3.5, cd: 0, flash: 0, muzzle: 0, ph: rnd(0, 6.28) });
+  S.banner = { txt: 'ARTILHARIA INTERESTELAR SE APROXIMANDO', col: '#ff4d6d', t: 0, max: 4 };
+}
+function bossPolys(r){
+  const hull = [[r,0],[r*0.5,-r*0.34],[-r*0.6,-r*0.44],[-r*0.88,-r*0.2],[-r*0.88,r*0.2],[-r*0.6,r*0.44],[r*0.5,r*0.34]];
+  const podL = rectPoly(-r*0.55,-r*0.7,r*0.9,r*0.28), podR = rectPoly(-r*0.55,r*0.42,r*0.9,r*0.28);
+  return [hull, podL, podR];
+}
+function bossToWorld(b, lx, ly){
+  const c = Math.cos(b.a), s = Math.sin(b.a);
+  return [b.x + lx*c - ly*s, b.y + lx*s + ly*c];
+}
+function bossFire(b){
+  const lead = Math.hypot(ball.x-b.x, ball.y-b.y)/BOLT_SPEED*0.6;
+  const tx = ball.x + ball.vx*lead, ty = ball.y + ball.vy*lead;
+  for(const [lx, ly] of [[b.r*0.85, -b.r*0.56], [b.r*0.85, b.r*0.56], [b.r*1.02, 0]]){
+    const [x, y] = bossToWorld(b, lx, ly);
+    const a = Math.atan2(ty-y, tx-x) + rnd(-0.05, 0.05);
+    bolts.push({ x, y, vx: Math.cos(a)*BOLT_SPEED, vy: Math.sin(a)*BOLT_SPEED, life: 0 });
+  }
+  b.muzzle = 0.15;
+}
+function updateBosses(dt){
+  for(const b of bosses){
+    const tx = W/2 + Math.cos(time*0.13 + b.ph)*W*0.3, ty = H/2 + Math.sin(time*0.19 + b.ph)*H*0.28;
+    const dx = tx-b.x, dy = ty-b.y, d = Math.hypot(dx, dy) || 1, sp = Math.min(55, d);
+    b.vx += (dx/d*sp - b.vx)*Math.min(1, dt*0.8); b.vy += (dy/d*sp - b.vy)*Math.min(1, dt*0.8);
+    b.x += b.vx*dt; b.y += b.vy*dt;
+    const ta = Math.atan2(ball.y-b.y, ball.x-b.x);
+    let da = ta - b.a; while(da > Math.PI) da -= Math.PI*2; while(da < -Math.PI) da += Math.PI*2;
+    b.a += da*Math.min(1, dt*1.1);
+    b.cd -= dt; b.flash -= dt; b.muzzle -= dt;
+    const onScreen = b.x > 0 && b.x < W && b.y > 0 && b.y < H;
+    b.fireT -= dt;
+    if(b.fireT <= 0 && onScreen){ bossFire(b); b.fireT = 2.6 - (BOSS_HP - b.hp)*0.35; }
+  }
+  for(const p of bolts){
+    p.life += dt; p.x += p.vx*dt; p.y += p.vy*dt;
+    if(Math.hypot(p.x-ball.x, p.y-ball.y) < ball.R + 4){
+      p.dead = true;
+      spawnSparks(p.x, p.y, -p.vx/BOLT_SPEED, -p.vy/BOLT_SPEED, 120);
+      changeMass(-0.7);
+      continue;
+    }
+    for(const o of obstacles) if(Math.hypot(p.x-o.x, p.y-o.y) < o.cr){ p.dead = true; spawnSparks(p.x, p.y, 0, 0, 40); break; }
+    if(p.life > 7 || p.x < -50 || p.x > W+50 || p.y < -50 || p.y > H+50) p.dead = true;
+  }
+  bolts = bolts.filter(p => !p.dead);
+}
+function hitBoss(b){
+  b.hp--; b.cd = 0.9; b.flash = 0.35; S.shake = Math.max(S.shake, 0.45);
+  explode(ball.x + (b.x-ball.x)*0.5, ball.y + (b.y-ball.y)*0.5, 14, ['#ffffff','#9fe8ff','#ff9a2e']);
+  floatText(`Golpe ${BOSS_HP - b.hp}/${BOSS_HP}`, '#ffd27a', b.x, b.y - b.r - 14);
+  if(b.hp <= 0){
+    b.dead = true; S.bossesKilled++; S.shake = 1;
+    for(let i=0;i<6;i++){
+      const [x, y] = bossToWorld(b, rnd(-b.r*0.8, b.r*0.8), rnd(-b.r*0.5, b.r*0.5));
+      explode(x, y, b.r*rnd(0.5, 0.9), ['#ffffff','#ffd27a','#ff7a2e','#ff4d6d','#9fe8ff']);
+    }
+    stream(b.x, b.y, ball, 60, 'rgba(255,220,140,A)', b.r*0.6);
+    changeMass(+5);
+    S.banner = { txt: 'ARTILHARIA DESTRUÍDA!', col: '#7be0a0', t: 0, max: 3 };
+  }
+}
+function drawBoss(b){
+  const r = b.r, [ux, uy] = sunDir(b.x, b.y);
+  ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.a);
+  // motores
+  ctx.globalCompositeOperation = 'lighter';
+  for(const ey of [-r*0.24, 0, r*0.24, -r*0.56, r*0.56]){
+    const ex = Math.abs(ey) > r*0.4 ? -r*0.58 : -r*0.9, fl = r*(0.35 + Math.random()*0.15);
+    const g = ctx.createLinearGradient(ex, 0, ex-fl, 0);
+    g.addColorStop(0, 'rgba(255,140,220,0.95)'); g.addColorStop(1, 'rgba(120,60,255,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(ex, ey-r*0.07); ctx.lineTo(ex-fl, ey); ctx.lineTo(ex, ey+r*0.07); ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+  const [hull, podL, podR] = bossPolys(r);
+  // canhões
+  ctx.fillStyle = '#2b2f38';
+  for(const sy of [-1, 1]) ctx.fillRect(r*0.3, sy*r*0.56 - r*0.05, r*0.55, r*0.1);
+  // casulos laterais
+  const pg = ctx.createLinearGradient(0, -r*0.7, 0, r*0.7);
+  pg.addColorStop(0, '#565d6c'); pg.addColorStop(0.5, '#2c313b'); pg.addColorStop(1, '#4a505e');
+  ctx.fillStyle = pg; tracePolys(ctx, [podL, podR]); ctx.fill();
+  // casco
+  const hg = ctx.createLinearGradient(0, -r*0.45, 0, r*0.45);
+  hg.addColorStop(0, '#454b59'); hg.addColorStop(0.5, '#7a8293'); hg.addColorStop(1, '#2a2e38');
+  ctx.fillStyle = hg; tracePolys(ctx, [hull]); ctx.fill();
+  ctx.strokeStyle = 'rgba(160,180,210,0.45)'; ctx.lineWidth = 1.2; ctx.stroke();
+  // faixas e placas
+  ctx.fillStyle = '#b3283f'; ctx.fillRect(-r*0.6, -r*0.04, r*1.3, r*0.08);
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1;
+  for(let i=-2;i<=2;i++){ ctx.beginPath(); ctx.moveTo(i*r*0.22, -r*0.36); ctx.lineTo(i*r*0.22, r*0.36); ctx.stroke(); }
+  // ponte de comando
+  ctx.fillStyle = '#161922'; ctx.beginPath(); ctx.ellipse(r*0.1, 0, r*0.24, r*0.15, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = `rgba(255,70,90,${0.6 + 0.4*Math.sin(time*4)})`;
+  for(let i=0;i<5;i++) ctx.fillRect(r*(0.0 + i*0.05), -r*0.03, r*0.03, r*0.06);
+  // iluminação pelo sol
+  const ca = Math.cos(-b.a), sa = Math.sin(-b.a);
+  ctx.save(); tracePolys(ctx, [hull, podL, podR]); ctx.clip();
+  shade(ctx, ux*ca - uy*sa, ux*sa + uy*ca, r); ctx.restore();
+  // brilho dos canhões
+  if(b.muzzle > 0){
+    ctx.globalCompositeOperation = 'lighter';
+    for(const [mx, my] of [[r*0.85,-r*0.56],[r*0.85,r*0.56],[r*1.02,0]]){
+      const g = ctx.createRadialGradient(mx, my, 0, mx, my, r*0.2);
+      g.addColorStop(0, 'rgba(255,120,240,0.9)'); g.addColorStop(1, 'rgba(255,0,200,0)');
+      ctx.fillStyle = g; ctx.fillRect(mx-r*0.2, my-r*0.2, r*0.4, r*0.4);
+    }
+  }
+  ctx.restore();
+  // escudo: um segmento por golpe restante
+  ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+  const seg = Math.PI*2/BOSS_HP;
+  for(let i=0;i<BOSS_HP;i++){
+    const on = i < b.hp;
+    ctx.strokeStyle = on ? `rgba(110,220,255,${0.35 + 0.2*Math.sin(time*3+i)})` : 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = on ? 3 : 2;
+    ctx.beginPath(); ctx.arc(b.x, b.y, r*1.12, time*0.3 + i*seg + 0.12, time*0.3 + (i+1)*seg - 0.12); ctx.stroke();
+  }
+  if(b.flash > 0){
+    ctx.fillStyle = `rgba(200,240,255,${b.flash})`;
+    ctx.beginPath(); ctx.arc(b.x, b.y, r*1.12, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawBolts(){
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for(const p of bolts){
+    const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 10);
+    g.addColorStop(0, 'rgba(255,240,255,1)'); g.addColorStop(0.3, 'rgba(255,90,220,0.8)'); g.addColorStop(1, 'rgba(160,0,255,0)');
+    ctx.fillStyle = g; ctx.fillRect(p.x-10, p.y-10, 20, 20);
+    ctx.strokeStyle = 'rgba(255,120,230,0.5)'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx*0.06, p.y - p.vy*0.06); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* ======================================================================
+   Física do sol
+   ====================================================================== */
+function bounce(nx, ny, pen, bvx = 0, bvy = 0){
+  ball.x += nx*pen; ball.y += ny*pen;
+  const rvx = ball.vx - bvx, rvy = ball.vy - bvy, vn = rvx*nx + rvy*ny;
+  if(vn < 0){
+    ball.vx -= (1+RESTITUTION)*vn*nx; ball.vy -= (1+RESTITUTION)*vn*ny;
+    if(-vn > 25) spawnSparks(ball.x - nx*ball.R, ball.y - ny*ball.R, nx, ny, -vn);
+    return -vn;
+  }
+  return 0;
+}
+
+function step(dt){
+  const m = S.mass;
+  ball.wander += (Math.random()*2-1) * Math.sqrt(dt) * 4.0;
+  const Fw = params.rand * 1100;
+  let ax = Math.cos(ball.wander)*Fw/m, ay = Math.sin(ball.wander)*Fw/m;
+  const s = Math.hypot(ball.vx, ball.vy);
+  if(s > 1){ const k = (params.cruise - s)*0.45; ax += ball.vx/s*k; ay += ball.vy/s*k; }
+  else { ax += Math.cos(ball.wander)*params.cruise; ay += Math.sin(ball.wander)*params.cruise; }
+
+  // buracos negros: gravidade (independe da massa do sol) e dreno de massa
+  for(const h of holes){
+    const dx = h.x-ball.x, dy = h.y-ball.y, d = Math.hypot(dx, dy) || 1;
+    if(d < h.infl){
+      const g = 2600 * h.r*h.r / Math.max(d*d, (h.r*1.6)**2) * (1 - d/h.infl);
+      ax += dx/d*g; ay += dy/d*g;
+    }
+    if(d < h.drainR + ball.R*0.5){
+      const rate = d < h.r + ball.R*0.3 ? 3.5 : 1.8, dm = rate*dt;
+      changeMass(-dm, false); S.drainAcc += dm;
+      if(Math.random() < 0.6){
+        const a = Math.atan2(dy, dx) + rnd(-0.8, 0.8);
+        stream(ball.x + Math.cos(a)*ball.R, ball.y + Math.sin(a)*ball.R, h, 1, 'rgba(255,170,90,A)', 2);
+      }
+    }
+  }
+  if(S.drainAcc >= 1){ floatText('-' + S.drainAcc.toFixed(1) + ' massa', '#c58bff'); S.drainAcc = 0; }
+
+  ball.vx += ax*dt; ball.vy += ay*dt;
+  const s2 = Math.hypot(ball.vx, ball.vy), MAXV = 700;
+  if(s2 > MAXV){ ball.vx *= MAXV/s2; ball.vy *= MAXV/s2; }
+
+  const n = Math.max(1, Math.ceil(s2*dt / (ball.R*0.4))), h = dt/n;
+  for(let k=0;k<n;k++){
+    const R = ball.R;
+    ball.x += ball.vx*h; ball.y += ball.vy*h;
+    if(ball.x < R) bounce(1,0,R-ball.x);
+    if(ball.x > W-R) bounce(-1,0,ball.x-(W-R));
+    if(ball.y < R) bounce(0,1,R-ball.y);
+    if(ball.y > H-R) bounce(0,-1,ball.y-(H-R));
+    for(const o of obstacles){
+      const dx = ball.x-o.x, dy = ball.y-o.y, d = Math.hypot(dx, dy);
+      if(d < R + o.cr && d > 0) bounce(dx/d, dy/d, R + o.cr - d);
+    }
+    for(const st of stars){
+      const dx = ball.x-st.x, dy = ball.y-st.y, d = Math.hypot(dx, dy);
+      if(d < R + st.r && d > 0){
+        bounce(dx/d, dy/d, R + st.r - d);
+        if(st.cd <= 0){
+          st.cd = 0.6;
+          changeMass(-1.2);
+          stream(ball.x - dx/d*R, ball.y - dy/d*R, st, 26, 'rgba(255,190,110,A)', 6);
+        }
+      }
+    }
+    for(const b of bosses){
+      const dx = ball.x-b.x, dy = ball.y-b.y, d = Math.hypot(dx, dy), br = b.r*0.8;
+      if(d < R + br && d > 0){
+        const imp = bounce(dx/d, dy/d, R + br - d, b.vx, b.vy);
+        if(imp > 40 && b.cd <= 0 && !b.dead) hitBoss(b);
+      }
+    }
+  }
+  bosses = bosses.filter(b => !b.dead);
+  for(const st of stars) st.cd -= dt;
+  for(const o of obstacles) o.ang += o.spin*dt;
+  rollSun(dt);
+  if(!isFinite(ball.x) || !isFinite(ball.y) || !isFinite(ball.vx) || !isFinite(ball.vy)){
+    ball.x = W/2; ball.y = H/2; ball.vx = params.cruise; ball.vy = 0;
+  }
+}
+
+/* ======================================================================
+   Desenho do sol (sprite WebGL ou 2D + brilho)
+   ====================================================================== */
+function drawSun(){
+  const R = ball.R, S2 = R*spriteScale;
+  ctx.globalCompositeOperation = 'lighter';
+  const g = ctx.createRadialGradient(ball.x, ball.y, R*0.8, ball.x, ball.y, R*8);
+  g.addColorStop(0, 'rgba(255,150,50,0.32)');
+  g.addColorStop(0.3, 'rgba(255,90,20,0.08)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g; ctx.fillRect(ball.x-R*8, ball.y-R*8, R*16, R*16);
+  ctx.globalCompositeOperation = 'source-over';
+  if(sunMode === 'gl'){
+    renderSunSprite();
+    ctx.drawImage(glc, ball.x-S2, ball.y-S2, 2*S2, 2*S2);
+  } else {
+    drawSun2D();
+  }
+}
+
+/* ======================================================================
+   Empurrão: gira a rota do sol na direção do arraste
+   ====================================================================== */
+// Giro máximo de um arraste completo. Com a massa inicial vale o parâmetro
+// (90° a 180°); um sol mais pesado gira menos e um mais leve gira mais.
+function maxTurnRad(){
+  const k = clamp(Math.sqrt(START_MASS / Math.max(MIN_MASS, S.mass)), 0.4, 2);
+  return Math.min(Math.PI, params.maxTurn*Math.PI/180 * k);
+}
+// Resultado de um arraste (dx, dy): a direção do arraste é a rota desejada e
+// o comprimento é a força (MAX_DRAG = empurrão completo). A rapidez é mantida.
+function pushResult(dx, dy){
+  const l = Math.hypot(dx, dy), f = clamp(l/MAX_DRAG, 0, 1), want = Math.atan2(dy, dx);
+  const sp = Math.hypot(ball.vx, ball.vy);
+  if(sp < 20){ // quase parado: parte na direção do arraste
+    const v = Math.max(params.cruise*0.6*f, sp);
+    return { nvx: Math.cos(want)*v, nvy: Math.sin(want)*v, turn: 0 };
+  }
+  const cur = Math.atan2(ball.vy, ball.vx);
+  let diff = want - cur;
+  while(diff > Math.PI) diff -= Math.PI*2;
+  while(diff <= -Math.PI) diff += Math.PI*2;
+  const turn = Math.sign(diff) * Math.min(Math.abs(diff), maxTurnRad()*f);
+  const na = cur + turn, v = Math.max(sp, params.cruise*0.5);
+  return { nvx: Math.cos(na)*v, nvy: Math.sin(na)*v, turn };
+}
+
+/* ======================================================================
+   Interação: clicar e arrastar
+   ====================================================================== */
+const drag = { active:false, id:null, sx:0, sy:0, cx:0, cy:0 };
+function pointerPos(e){ const r = cv.getBoundingClientRect(); return [e.clientX-r.left, e.clientY-r.top]; }
+function onBall(x, y){ return Math.hypot(x-ball.x, y-ball.y) <= ball.R*1.6 + 8; }
+function dragVec(){
+  let dx = drag.cx-drag.sx, dy = drag.cy-drag.sy; const l = Math.hypot(dx, dy);
+  if(l > MAX_DRAG){ dx *= MAX_DRAG/l; dy *= MAX_DRAG/l; }
+  return [dx, dy];
+}
+cv.addEventListener('pointerdown', e => {
+  const [x, y] = pointerPos(e);
+  if(S.over || !onBall(x, y)) return;
+  drag.active = true; drag.id = e.pointerId; drag.sx = drag.cx = x; drag.sy = drag.cy = y;
+  cv.setPointerCapture(e.pointerId); cv.classList.add('drag');
+});
+cv.addEventListener('pointermove', e => {
+  const [x, y] = pointerPos(e);
+  if(drag.active && e.pointerId === drag.id){ drag.cx = x; drag.cy = y; }
+  else cv.classList.toggle('over', onBall(x, y));
+});
+function release(e){
+  if(!drag.active || e.pointerId !== drag.id) return;
+  const [dx, dy] = dragVec(), l = Math.hypot(dx, dy);
+  if(l > 4 && !S.over){
+    const r = pushResult(dx, dy);
+    ball.vx = r.nvx; ball.vy = r.nvy;
+    S.pushes++;
+    spawnSparks(ball.x-dx/l*ball.R, ball.y-dy/l*ball.R, -dx/l, -dy/l, l*0.6);
+  }
+  drag.active = false; cv.classList.remove('drag');
+}
+cv.addEventListener('pointerup', release);
+cv.addEventListener('pointercancel', e => { if(e.pointerId === drag.id){ drag.active = false; cv.classList.remove('drag'); } });
+
+function arrow(x1, y1, x2, y2, color, width, dash){
+  const a = Math.atan2(y2-y1, x2-x1), hl = 10 + width*2;
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash || []);
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2-Math.cos(a)*hl*0.6, y2-Math.sin(a)*hl*0.6); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(x2, y2);
+  ctx.lineTo(x2-Math.cos(a-0.4)*hl, y2-Math.sin(a-0.4)*hl);
+  ctx.lineTo(x2-Math.cos(a+0.4)*hl, y2-Math.sin(a+0.4)*hl);
+  ctx.closePath(); ctx.fill();
+}
+function drawDragUI(){
+  if(!drag.active) return;
+  const [dx, dy] = dragVec(), l = Math.hypot(dx, dy);
+  if(l < 4) return;
+  ctx.save(); ctx.lineCap = 'round';
+  const ux = dx/l, uy = dy/l, st = ball.R*1.15;
+  arrow(ball.x+ux*st, ball.y+uy*st, ball.x+ux*st+dx, ball.y+uy*st+dy, 'rgba(255,220,150,0.9)', 3);
+  const r = pushResult(dx, dy), cur = Math.atan2(ball.vy, ball.vx), full = maxTurnRad();
+  const L = Math.max(ball.R*3, 90);
+  // cone de alcance: até onde um arraste completo consegue girar a rota
+  ctx.fillStyle = 'rgba(120,220,255,0.08)'; ctx.strokeStyle = 'rgba(120,220,255,0.25)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(ball.x, ball.y); ctx.arc(ball.x, ball.y, L, cur-full, cur+full); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  const ou = Math.hypot(ball.vx, ball.vy) > 1;
+  if(ou) arrow(ball.x, ball.y, ball.x+Math.cos(cur)*L, ball.y+Math.sin(cur)*L, 'rgba(255,255,255,0.4)', 2, [5,5]);
+  const na = Math.atan2(r.nvy, r.nvx);
+  arrow(ball.x, ball.y, ball.x+Math.cos(na)*L, ball.y+Math.sin(na)*L, 'rgba(120,220,255,0.95)', 2.5);
+  ctx.font = '12px system-ui,sans-serif'; ctx.fillStyle = 'rgba(200,240,255,0.95)';
+  ctx.fillText(`giro ${Math.abs(r.turn*180/Math.PI).toFixed(0)}° (máx ${(full*180/Math.PI).toFixed(0)}°)`,
+    ball.x+Math.cos(na)*L+8, ball.y+Math.sin(na)*L-8);
+  ctx.restore();
+}
+
+/* ======================================================================
+   Sobreposições na tela: barra do chefe e avisos
+   ====================================================================== */
+function drawOverlays(){
+  if(bosses.length){
+    const b = bosses[0], w = 220, x = W/2 - w/2, y = H - 28;
+    ctx.save();
+    ctx.font = 'bold 12px system-ui,sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#ff8095'; ctx.fillText('ARTILHARIA INTERESTELAR' + (bosses.length > 1 ? ` (+${bosses.length-1})` : ''), W/2, y);
+    for(let i=0;i<BOSS_HP;i++){
+      const sw = (w - (BOSS_HP-1)*6)/BOSS_HP, sx = x + i*(sw+6);
+      ctx.fillStyle = i < b.hp ? '#ff4d6d' : 'rgba(255,255,255,0.12)';
+      ctx.fillRect(sx, y+7, sw, 8);
+    }
+    ctx.restore();
+  }
+  if(S.banner){
+    const bn = S.banner, t = bn.t/bn.max;
+    const a = Math.min(1, bn.t*3, (bn.max-bn.t)*2) * (0.75 + 0.25*Math.sin(bn.t*10));
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, a);
+    ctx.font = `bold ${Math.round(clamp(W/28, 16, 30))}px system-ui,sans-serif`; ctx.textAlign = 'center';
+    ctx.shadowColor = bn.col; ctx.shadowBlur = 18; ctx.fillStyle = bn.col;
+    ctx.fillText(bn.txt, W/2, H*0.2);
+    ctx.restore();
+    if(t >= 1) S.banner = null;
+  }
+}
+
+/* ======================================================================
+   Loop principal
+   ====================================================================== */
+const el = id => document.getElementById(id);
+const hint = el('hint'), hudLine = el('hudLine'), massFill = el('massFill'), massTxt = el('massTxt');
+const massSlider = el('mass'), massOut = el('massOut');
+let last = performance.now(), statT = 0, errorShown = false;
+const fmtTime = s => { s = Math.max(0, Math.floor(s)); return Math.floor(s/60) + ':' + String(s%60).padStart(2, '0'); };
+
+function showError(msg){
+  hint.innerHTML = '<span style="color:#ff7b6b">Erro: ' + String(msg).replace(/[<&]/g, '') +
+    '</span><br>O jogo continua rodando no modo seguro.';
+}
+function frame(now){
+  requestAnimationFrame(frame);           // agenda antes: um erro não congela o jogo
+  try { tick(now); }
+  catch(e){
+    console.error(e);
+    if(sunMode === 'gl') setSunMode('2d');
+    if(!errorShown){ errorShown = true; showError(e && e.message || e); }
+  }
+}
+function tick(now){
+  const dt = Math.min(0.05, Math.max(0, (now-last)/1000)); last = now;
+  const running = !S.paused && !S.over;
+  if(running){
+    time += dt; S.time += dt;
+    if(S.time >= S.nextBoss){ spawnBoss(); S.nextBoss += BOSS_INTERVAL; }
+    step(dt);
+    updateShips(dt);
+    updateBosses(dt);
+    spawnEmbers(dt);
+  }
+  if(!S.paused){ updateParticles(dt); if(S.banner) S.banner.t += dt; }
+  S.shake = Math.max(0, S.shake - dt*1.6);
+
+  const sh = S.shake*S.shake*10;
+  ctx.setTransform(DPR, 0, 0, DPR, rnd(-sh, sh)*DPR, rnd(-sh, sh)*DPR);
+  ctx.globalCompositeOperation = 'source-over';
+  drawSky();
+  drawHoles();
+  drawObstacles();
+  drawStars();
+  for(const s of ships) drawShip(s);
+  for(const b of bosses) drawBoss(b);
+  drawBolts();
+  drawParticles();
+  if(!S.over) drawSun();
+  drawDragUI();
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  drawOverlays();
+
+  statT += dt;
+  if(statT > 0.15){ statT = 0; updateStats(); }
+}
+
+function updateStats(){
+  massFill.style.width = (S.mass/MAX_MASS*100).toFixed(1) + '%';
+  massTxt.textContent = S.mass.toFixed(1);
+  hudLine.textContent = `Tempo ${fmtTime(S.time)} · Próxima artilharia em ${fmtTime(S.nextBoss - S.time)}`;
+  el('sTime').textContent = fmtTime(S.time);
+  el('sBoss').textContent = fmtTime(S.nextBoss - S.time);
+  el('sShips').textContent = S.shipsKilled;
+  el('sBosses').textContent = S.bossesKilled;
+  el('sPush').textContent = S.pushes;
+  el('sSpeed').textContent = Math.hypot(ball.vx, ball.vy).toFixed(0);
+  if(document.activeElement !== massSlider){ massSlider.value = S.mass; massOut.textContent = S.mass.toFixed(1); }
+}
+
+function gameOver(){
+  S.over = true; drag.active = false;
+  explode(ball.x, ball.y, ball.R*1.5, ['#ffd27a','#ff7a2e','#ff4020','#ffffff']);
+  el('overStats').innerHTML = `Você sobreviveu <b>${fmtTime(S.time)}</b>.<br>` +
+    `Naves destruídas: <b>${S.shipsKilled}</b> · Artilharias destruídas: <b>${S.bossesKilled}</b>`;
+  el('over').hidden = false;
+}
+function restart(){
+  Object.assign(S, { time: 0, nextBoss: BOSS_INTERVAL, over: false, pushes: 0, shipsKilled: 0,
+    bossesKilled: 0, shake: 0, banner: null, shipTimer: 1, drainAcc: 0 });
+  setMass(START_MASS);
+  ships = []; bosses = []; bolts = []; embers = []; sparks = []; debris = []; streams = []; flashes = []; texts = [];
+  ball.x = W/2; ball.y = H/2; ball.vx = params.cruise*0.8; ball.vy = params.cruise*0.5;
+  syncWorld(true);
+  el('over').hidden = true;
+  updateStats();
+}
+
+/* ======================================================================
+   Redimensionamento e controles
+   ====================================================================== */
+function resize(){
+  const r = cv.getBoundingClientRect();
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = Math.max(50, r.width); H = Math.max(50, r.height);
+  cv.width = Math.floor(W*DPR); cv.height = Math.floor(H*DPR);
+  ball.x = clamp(ball.x, ball.R, Math.max(ball.R, W-ball.R));
+  ball.y = clamp(ball.y, ball.R, Math.max(ball.R, H-ball.R));
+  buildSky();
+  syncWorld(true);
+}
+let resizeTimer = 0;
+const onResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 80); };
+if(window.ResizeObserver) new ResizeObserver(onResize).observe(cv);
+else window.addEventListener('resize', onResize);
+
+function bind(id, fmt, apply){
+  const inp = el(id), out = el(id+'Out');
+  const upd = () => { apply(+inp.value); out.textContent = fmt(+inp.value); };
+  inp.addEventListener('input', upd); upd();
+}
+bind('rand', v => v+'%', v => params.rand = v/100);
+bind('count', v => v, v => { params.count = v; if(W) syncWorld(false); });
+bind('ships', v => v, v => params.ships = v);
+bind('hazards', v => v, v => { params.hazards = v; if(W) syncWorld(false); });
+bind('mass', v => v.toFixed(1), v => { if(!S.over) setMass(v); });
+bind('speed', v => v+' px/s', v => params.cruise = v);
+bind('turn', v => v+'°', v => params.maxTurn = v);
+el('newMap').addEventListener('click', () => syncWorld(true));
+el('pause').addEventListener('click', e => { S.paused = !S.paused; e.target.textContent = S.paused ? 'Continuar' : 'Pausar'; });
+el('callBoss').addEventListener('click', () => { if(!S.over) spawnBoss(); });
+el('restart').addEventListener('click', restart);
+el('restart2').addEventListener('click', restart);
+
+function setSunMode(m){
+  sunMode = (m === 'gl' && hasGL && !gl.isContextLost()) ? 'gl' : '2d';
+  glToggle.checked = sunMode === 'gl';
+  glNote.textContent = sunMode === 'gl' ? 'Shader WebGL ativo.' :
+    (hasGL ? 'Usando o modo 2D (mais leve).' : 'WebGL indisponível: usando o modo 2D.');
+}
+const glToggle = el('glToggle'), glNote = el('glNote');
+glToggle.addEventListener('change', () => {
+  if(glToggle.checked && !validateGL()){ setSunMode('2d'); glNote.textContent = 'O WebGL não renderizou corretamente neste navegador; mantido o modo 2D.'; return; }
+  setSunMode(glToggle.checked ? 'gl' : '2d');
+});
+
+resize();
+ball.x = W*0.5; ball.y = H*0.5; syncWorld(true);
+const forced = new URLSearchParams(location.search).get('render');
+if(forced === '2d') setSunMode('2d');
+else if(validateGL()) setSunMode('gl');
+else { setSunMode('2d'); if(hasGL) glNote.textContent = 'O WebGL não renderizou corretamente neste navegador; usando o modo 2D.'; }
+updateStats();
+// ganchos de teste (inofensivos): permitem inspecionar o estado pelo console
+window.__solErrante = { S, ball, get ships(){ return ships; }, get bosses(){ return bosses; },
+  get stars(){ return stars; }, get holes(){ return holes; }, spawnBoss };
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
