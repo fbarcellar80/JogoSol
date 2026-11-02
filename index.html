@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sol Errante</title>
+<style>
+  :root{
+    --bg:#0b0907; --panel:#15110e; --line:#3a2c20; --text:#f3e6d6;
+    --muted:#a8927c; --accent:#ff9a2e;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+  #app{display:flex;height:100%}
+  #stage{flex:1;position:relative;min-width:0;min-height:0}
+  #game{display:block;width:100%;height:100%;touch-action:none;cursor:crosshair}
+  #game.over{cursor:grab}
+  #game.drag{cursor:grabbing}
+  #hud{position:absolute;left:14px;top:12px;pointer-events:none;font-size:13px;
+    color:var(--muted);text-shadow:0 1px 3px #000}
+  #hud b{color:var(--text);font-weight:600}
+  aside{width:280px;flex:none;background:var(--panel);border-left:1px solid var(--line);
+    padding:20px 18px;overflow:auto}
+  h1{margin:0 0 4px;font-size:20px;letter-spacing:.5px}
+  h1 span{color:var(--accent)}
+  .sub{margin:0 0 18px;font-size:12.5px;color:var(--muted);line-height:1.45}
+  .ctl{margin-bottom:18px}
+  .ctl label{display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px}
+  .ctl label output{color:var(--accent);font-variant-numeric:tabular-nums}
+  .ctl small{display:block;color:var(--muted);font-size:11.5px;margin-top:4px;line-height:1.35}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .row{display:flex;gap:8px;margin:6px 0 18px}
+  button{flex:1;background:#241a12;color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:9px 10px;font:inherit;font-size:13px;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  .stats{font-size:12.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:12px;line-height:1.7}
+  .stats b{color:var(--text);font-variant-numeric:tabular-nums}
+  @media (max-width:720px){
+    #app{flex-direction:column}
+    aside{width:100%;border-left:0;border-top:1px solid var(--line);max-height:45%;padding:14px 16px}
+    .sub{display:none}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="game"></canvas>
+    <div id="hud">Clique no sol e <b>arraste</b> na direção desejada — solte para empurrar.</div>
+  </div>
+  <aside>
+    <h1>Sol <span>Errante</span></h1>
+    <p class="sub">Uma estrela em miniatura vaga pela arena. Clique sobre ela, arraste na direção
+      para onde quer empurrá-la e solte. Ela é pesada: um único empurrão só desvia um pouco a rota.</p>
+
+    <div class="ctl">
+      <label for="rand">Aleatoriedade <output id="randOut"></output></label>
+      <input id="rand" type="range" min="0" max="100" value="35">
+      <small>Quanto o sol “vagueia” sozinho, sem você tocar.</small>
+    </div>
+    <div class="ctl">
+      <label for="count">Obstáculos <output id="countOut"></output></label>
+      <input id="count" type="range" min="0" max="25" value="8">
+    </div>
+    <div class="ctl">
+      <label for="mass">Massa / inércia <output id="massOut"></output></label>
+      <input id="mass" type="range" min="1" max="30" value="8">
+      <small>Mais massa = cada empurrão muda menos a velocidade (e o sol fica maior).</small>
+    </div>
+    <div class="ctl">
+      <label for="speed">Velocidade de cruzeiro <output id="speedOut"></output></label>
+      <input id="speed" type="range" min="40" max="350" value="150">
+    </div>
+
+    <div class="row">
+      <button id="newMap">Novo mapa</button>
+      <button id="pause">Pausar</button>
+    </div>
+
+    <div class="stats">
+      Velocidade: <b id="sSpeed">0</b> px/s<br>
+      Empurrões: <b id="sPush">0</b><br>
+      Colisões: <b id="sHits">0</b>
+    </div>
+  </aside>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ======================================================================
+   Parâmetros e estado
+   ====================================================================== */
+const params = { rand: 0.35, count: 8, mass: 8, cruise: 150 };
+const IMPULSE_PER_PX = 2.5;     // impulso por pixel arrastado
+const MAX_DRAG = 220;           // arraste máximo considerado (px)
+const RESTITUTION = 0.85;
+
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+
+const ball = { x: 200, y: 200, vx: 110, vy: 70, R: 30, wander: Math.random() * Math.PI * 2 };
+let obstacles = [];
+let embers = [], sparks = [];
+let hits = 0, pushes = 0, paused = false, time = 0;
+// matriz de rotação (linha-major) para o “rolar” da superfície do sol
+let rot = [1,0,0, 0,1,0, 0,0,1];
+
+const radiusFromMass = m => 15 * Math.cbrt(m);
+const spriteScale = 2.7;        // meia-largura do sprite / raio do disco
+
+/* ======================================================================
+   Sol em WebGL (shader procedural) — renderizado num canvas fora da tela
+   ====================================================================== */
+const glc = document.createElement('canvas');
+const gl = glc.getContext('webgl', { premultipliedAlpha: true, preserveDrawingBuffer: true, antialias: false });
+let sunProg = null, uLoc = {};
+
+const VS = `
+attribute vec2 aPos; varying vec2 vUv;
+void main(){ vUv = aPos * vec2(1.0,-1.0); gl_Position = vec4(aPos,0.0,1.0); }`;
+
+const FS = `
+precision highp float;
+varying vec2 vUv;
+uniform float uT;
+uniform float uR;      // raio do disco em coordenadas do sprite
+uniform vec2  uVel;    // velocidade normalizada (0..1)
+uniform mat3  uRot;
+
+vec3 mod289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}
+vec4 mod289(vec4 x){return x-floor(x*(1.0/289.0))*289.0;}
+vec4 permute(vec4 x){return mod289(((x*34.0)+1.0)*x);}
+vec4 taylorInvSqrt(vec4 r){return 1.79284291400159-0.85373472095314*r;}
+float snoise(vec3 v){
+  const vec2 C=vec2(1.0/6.0,1.0/3.0);
+  const vec4 D=vec4(0.0,0.5,1.0,2.0);
+  vec3 i=floor(v+dot(v,C.yyy));
+  vec3 x0=v-i+dot(i,C.xxx);
+  vec3 g=step(x0.yzx,x0.xyz);
+  vec3 l=1.0-g;
+  vec3 i1=min(g.xyz,l.zxy);
+  vec3 i2=max(g.xyz,l.zxy);
+  vec3 x1=x0-i1+C.xxx;
+  vec3 x2=x0-i2+C.yyy;
+  vec3 x3=x0-D.yyy;
+  i=mod289(i);
+  vec4 p=permute(permute(permute(i.z+vec4(0.0,i1.z,i2.z,1.0))+i.y+vec4(0.0,i1.y,i2.y,1.0))+i.x+vec4(0.0,i1.x,i2.x,1.0));
+  float n_=0.142857142857;
+  vec3 ns=n_*D.wyz-D.xzx;
+  vec4 j=p-49.0*floor(p*ns.z*ns.z);
+  vec4 x_=floor(j*ns.z);
+  vec4 y_=floor(j-7.0*x_);
+  vec4 x=x_*ns.x+ns.yyyy;
+  vec4 y=y_*ns.x+ns.yyyy;
+  vec4 h=1.0-abs(x)-abs(y);
+  vec4 b0=vec4(x.xy,y.xy);
+  vec4 b1=vec4(x.zw,y.zw);
+  vec4 s0=floor(b0)*2.0+1.0;
+  vec4 s1=floor(b1)*2.0+1.0;
+  vec4 sh=-step(h,vec4(0.0));
+  vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy;
+  vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;
+  vec3 p0=vec3(a0.xy,h.x);
+  vec3 p1=vec3(a0.zw,h.y);
+  vec3 p2=vec3(a1.xy,h.z);
+  vec3 p3=vec3(a1.zw,h.w);
+  vec4 norm=taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));
+  p0*=norm.x;p1*=norm.y;p2*=norm.z;p3*=norm.w;
+  vec4 m=max(0.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.0);
+  m=m*m;
+  return 42.0*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
+}
+float fbm(vec3 p){
+  float f=0.0, a=0.5;
+  for(int i=0;i<5;i++){ f+=a*snoise(p); p=p*2.03+vec3(1.7,9.2,3.1); a*=0.5; }
+  return f;
+}
+float fbm3(vec3 p){
+  float f=0.0, a=0.5;
+  for(int i=0;i<3;i++){ f+=a*snoise(p); p=p*2.03+vec3(1.7,9.2,3.1); a*=0.5; }
+  return f;
+}
+// rampa de cor de corpo negro: vermelho escuro -> laranja -> amarelo -> branco
+vec3 ramp(float x){
+  x=clamp(x,0.0,1.5);
+  vec3 c1=vec3(0.30,0.02,0.00), c2=vec3(0.95,0.22,0.02), c3=vec3(1.00,0.58,0.10),
+       c4=vec3(1.00,0.88,0.50), c5=vec3(1.00,1.00,0.95);
+  if(x<0.3) return mix(c1,c2,x/0.3);
+  if(x<0.6) return mix(c2,c3,(x-0.3)/0.3);
+  if(x<0.9) return mix(c3,c4,(x-0.6)/0.3);
+  return mix(c4,c5,clamp((x-0.9)/0.5,0.0,1.0));
+}
+void main(){
+  vec2 p=vUv; float r=length(p);
+  float vs=length(uVel); vec2 vdir = vs>0.001 ? uVel/vs : vec2(0.0);
+
+  /* ---------- disco (fotosfera) ---------- */
+  vec3 disk=vec3(0.0); float a=0.0;
+  if(r<uR+0.01){
+    vec2 q=p/uR; float z=sqrt(max(0.0,1.0-dot(q,q)));
+    vec3 n=vec3(q,z);
+    vec3 sp=uRot*n;
+    // turbulência com distorção de domínio (plasma em convecção)
+    vec3 w = sp*2.4 + 0.9*vec3(
+      fbm3(sp*1.6+vec3(0.0,0.0,uT*0.08)),
+      fbm3(sp*1.6+vec3(5.2,1.3,2.8)-uT*0.06),
+      fbm3(sp*1.6+vec3(1.7,9.2,4.1)+uT*0.07));
+    float g  = fbm(w*1.5 + uT*0.05);
+    float gr = 1.0-abs(snoise(sp*22.0+vec3(0.0,0.0,uT*0.6)));   // granulação
+    float fil= pow(1.0-abs(snoise(w*3.0-uT*0.1)),6.0);           // filamentos brilhantes
+    float spot=smoothstep(0.62,0.78,snoise(sp*1.8+vec3(17.0,3.0,uT*0.01))); // manchas solares
+    float h = 0.62 + 0.45*g + 0.10*gr + 0.25*fil;
+    h *= 1.0 - 0.45*spot;
+    float limb = pow(z,0.45);                                     // escurecimento de borda
+    float temp = h*(0.30+0.80*limb);
+    disk = ramp(temp)*(0.75+0.55*limb);
+    disk += vec3(1.0,0.5,0.1)*pow(1.0-z,3.0)*0.35;                // leve halo cromosférico
+    a = smoothstep(uR, uR-0.008, r);
+  }
+
+  /* ---------- coroa e labaredas ---------- */
+  vec2 dir = r>0.0001 ? p/r : vec2(1.0,0.0);
+  float back = max(0.0,-dot(dir,vdir))*vs;          // labaredas arrastadas para trás
+  float d = r-uR;
+  float f  = fbm3(vec3(dir*2.3, d*5.0 - uT*1.1))*0.5+0.5;
+  float f2 = fbm3(vec3(dir*5.5, d*11.0 - uT*2.2))*0.5+0.5;
+  float reach = 0.045 + 0.20*f*f*f + 0.32*back*f2*f2;
+  float fl = exp(-max(d,0.0)/reach);
+  float glow = exp(-max(d,0.0)/0.28)*0.40;
+  float I = fl*(0.55+0.75*f2) + glow;
+  I *= smoothstep(1.0,0.75,r);
+  vec3 cor = ramp(0.25+0.75*fl)*I;
+  float ca = clamp(I,0.0,1.0);
+
+  vec3 col = disk*a + cor*(1.0-a);
+  float alpha = a + ca*(1.0-a);
+  gl_FragColor = vec4(min(col,vec3(1.0)), alpha);
+}`;
+
+function initGL(){
+  if(!gl) return false;
+  const mk = (type, src) => {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){ console.error(gl.getShaderInfoLog(s)); return null; }
+    return s;
+  };
+  const vs = mk(gl.VERTEX_SHADER, VS), fs = mk(gl.FRAGMENT_SHADER, FS);
+  if(!vs || !fs) return false;
+  sunProg = gl.createProgram();
+  gl.attachShader(sunProg, vs); gl.attachShader(sunProg, fs); gl.linkProgram(sunProg);
+  if(!gl.getProgramParameter(sunProg, gl.LINK_STATUS)){ console.error(gl.getProgramInfoLog(sunProg)); return false; }
+  gl.useProgram(sunProg);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(sunProg, 'aPos');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  for(const n of ['uT','uR','uVel','uRot']) uLoc[n] = gl.getUniformLocation(sunProg, n);
+  return true;
+}
+const hasGL = initGL();
+
+function renderSunSprite(){
+  const S = ball.R * spriteScale;
+  const px = Math.min(640, Math.ceil(2 * S * DPR));
+  if(glc.width !== px){ glc.width = glc.height = px; }
+  gl.viewport(0, 0, px, px);
+  gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.uniform1f(uLoc.uT, time);
+  gl.uniform1f(uLoc.uR, 1 / spriteScale);
+  const vn = 1 / 320;
+  let vx = ball.vx * vn, vy = ball.vy * vn;
+  const l = Math.hypot(vx, vy); if(l > 1){ vx /= l; vy /= l; }
+  gl.uniform2f(uLoc.uVel, vx, vy);
+  // envia como coluna-major
+  gl.uniformMatrix3fv(uLoc.uRot, false, new Float32Array([
+    rot[0], rot[3], rot[6], rot[1], rot[4], rot[7], rot[2], rot[5], rot[8]]));
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+// rotação incremental: a frente do sol rola na direção do movimento
+function rollSun(dt){
+  const s = Math.hypot(ball.vx, ball.vy);
+  if(s < 1) return;
+  const ux = ball.vx / s, uy = ball.vy / s;
+  const th = s * dt / ball.R * 0.35;
+  const c = Math.cos(th) - 1, sn = Math.sin(th);
+  // dQ = I + (cos-1)(uu^T + zz^T) + sin(u z^T - z u^T),  u=(ux,uy,0), z=(0,0,1)
+  const dQ = [
+    1 + c*ux*ux, c*ux*uy,     sn*ux,
+    c*uy*ux,     1 + c*uy*uy, sn*uy,
+    -sn*ux,      -sn*uy,      1 + c
+  ];
+  // rot = rot * dQ^T
+  const r = rot, n = new Array(9);
+  for(let i=0;i<3;i++) for(let j=0;j<3;j++){
+    n[i*3+j] = r[i*3]*dQ[j*3] + r[i*3+1]*dQ[j*3+1] + r[i*3+2]*dQ[j*3+2];
+  }
+  // reortonormaliza (Gram-Schmidt nas linhas)
+  const norm = v => { const l = Math.hypot(v[0],v[1],v[2]); return [v[0]/l,v[1]/l,v[2]/l]; };
+  let a = norm(n.slice(0,3)), b = n.slice(3,6);
+  const d = a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  b = norm([b[0]-d*a[0], b[1]-d*a[1], b[2]-d*a[2]]);
+  const cc = [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+  rot = [...a, ...b, ...cc];
+}
+
+/* ======================================================================
+   Arena: chão, obstáculos, iluminação
+   ====================================================================== */
+const floorCv = document.createElement('canvas');
+const lightCv = document.createElement('canvas');
+const lctx = lightCv.getContext('2d');
+
+function buildFloor(){
+  floorCv.width = Math.max(1, Math.floor(W * DPR));
+  floorCv.height = Math.max(1, Math.floor(H * DPR));
+  const f = floorCv.getContext('2d');
+  f.setTransform(DPR,0,0,DPR,0,0);
+  f.fillStyle = '#4a3f37'; f.fillRect(0,0,W,H);
+  // manchas
+  for(let i=0;i<W*H/900;i++){
+    const x=Math.random()*W, y=Math.random()*H, r=6+Math.random()*60;
+    const g=f.createRadialGradient(x,y,0,x,y,r);
+    const dark = Math.random()<0.5;
+    g.addColorStop(0, dark?'rgba(20,14,10,0.12)':'rgba(120,100,85,0.08)');
+    g.addColorStop(1,'rgba(0,0,0,0)');
+    f.fillStyle=g; f.fillRect(x-r,y-r,2*r,2*r);
+  }
+  // rachaduras
+  f.strokeStyle='rgba(15,10,8,0.35)'; f.lineCap='round';
+  for(let i=0;i<W*H/40000;i++){
+    let x=Math.random()*W, y=Math.random()*H, a=Math.random()*6.28;
+    f.lineWidth = 0.6+Math.random()*1.2;
+    f.beginPath(); f.moveTo(x,y);
+    const n = 4+Math.random()*10|0;
+    for(let k=0;k<n;k++){ a+= (Math.random()-0.5)*1.2; x+=Math.cos(a)*12; y+=Math.sin(a)*12; f.lineTo(x,y); }
+    f.stroke();
+  }
+  // granulado fino
+  const img=f.getImageData(0,0,floorCv.width,floorCv.height), d=img.data;
+  for(let i=0;i<d.length;i+=4){ const n=(Math.random()-0.5)*22; d[i]+=n; d[i+1]+=n; d[i+2]+=n; }
+  f.putImageData(img,0,0);
+  // borda escura (vinheta)
+  f.setTransform(DPR,0,0,DPR,0,0);
+  const vg=f.createRadialGradient(W/2,H/2,Math.min(W,H)*0.3,W/2,H/2,Math.max(W,H)*0.75);
+  vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.55)');
+  f.fillStyle=vg; f.fillRect(0,0,W,H);
+
+  lightCv.width = Math.max(1, Math.floor(W/2)); lightCv.height = Math.max(1, Math.floor(H/2));
+}
+
+function boundR(o){ return o.type==='c' ? o.r : Math.hypot(o.w,o.h)/2; }
+function centerOf(o){ return o.type==='c' ? [o.x,o.y] : [o.x+o.w/2, o.y+o.h/2]; }
+
+function makeObstacle(){
+  for(let tries=0; tries<200; tries++){
+    let o;
+    if(Math.random()<0.55){
+      const r = 18 + Math.random()*42;
+      o = { type:'c', r, x: r+20+Math.random()*(W-2*r-40), y: r+20+Math.random()*(H-2*r-40) };
+    } else {
+      const w = 26 + Math.random()*120, h = 26 + Math.random()*(Math.random()<0.5?40:120);
+      o = { type:'r', w, h, x: 20+Math.random()*(W-w-40), y: 20+Math.random()*(H-h-40) };
+    }
+    if(o.x<0||o.y<0) continue;
+    const [cx,cy] = centerOf(o), br = boundR(o);
+    if(Math.hypot(cx-ball.x, cy-ball.y) < br + ball.R + 90) continue;
+    let ok = true;
+    for(const p of obstacles){
+      const [px,py] = centerOf(p);
+      if(Math.hypot(cx-px, cy-py) < br + boundR(p) + ball.R*2 + 10){ ok=false; break; }
+    }
+    if(ok) return o;
+  }
+  return null;
+}
+
+function syncObstacles(regen){
+  if(regen) obstacles = [];
+  while(obstacles.length > params.count) obstacles.pop();
+  let guard = 0;
+  while(obstacles.length < params.count && guard++ < 60){
+    const o = makeObstacle(); if(o) obstacles.push(o); else break;
+  }
+}
+
+function drawLighting(){
+  const L = lctx, s = 0.5, lx = ball.x*s, ly = ball.y*s;
+  const lw = lightCv.width, lh = lightCv.height;
+  const reach = (380 + ball.R*9) * s;
+  L.globalCompositeOperation='source-over';
+  L.fillStyle='#000'; L.fillRect(0,0,lw,lh);
+  const flick = 1 + 0.04*Math.sin(time*13.1) + 0.03*Math.sin(time*7.3);
+  const g = L.createRadialGradient(lx,ly,0,lx,ly,reach*flick);
+  g.addColorStop(0,'rgba(255,225,170,1)');
+  g.addColorStop(0.15,'rgba(255,170,90,0.95)');
+  g.addColorStop(0.45,'rgba(220,90,30,0.45)');
+  g.addColorStop(1,'rgba(0,0,0,0)');
+  L.fillStyle=g; L.fillRect(0,0,lw,lh);
+
+  // sombras projetadas
+  L.fillStyle='#000';
+  const far = (W+H)*s;
+  for(const o of obstacles){
+    if(o.type==='c'){
+      const cx=o.x*s, cy=o.y*s, r=o.r*s;
+      const dx=cx-lx, dy=cy-ly, d=Math.hypot(dx,dy);
+      if(d<=r+0.5) continue;
+      const base=Math.atan2(dy,dx), half=Math.asin(r/d), t=Math.sqrt(d*d-r*r);
+      const a1=base+half, a2=base-half;
+      L.beginPath();
+      L.moveTo(lx+Math.cos(a1)*t, ly+Math.sin(a1)*t);
+      L.lineTo(lx+Math.cos(a1)*far, ly+Math.sin(a1)*far);
+      L.lineTo(lx+Math.cos(a2)*far, ly+Math.sin(a2)*far);
+      L.lineTo(lx+Math.cos(a2)*t, ly+Math.sin(a2)*t);
+      L.closePath(); L.fill();
+    } else {
+      const pts=[[o.x,o.y],[o.x+o.w,o.y],[o.x+o.w,o.y+o.h],[o.x,o.y+o.h]].map(p=>[p[0]*s,p[1]*s]);
+      for(let i=0;i<4;i++){
+        const a=pts[i], b=pts[(i+1)%4];
+        const ext = p => { const dx=p[0]-lx, dy=p[1]-ly, l=Math.hypot(dx,dy)||1; return [p[0]+dx/l*far, p[1]+dy/l*far]; };
+        const ea=ext(a), eb=ext(b);
+        L.beginPath(); L.moveTo(a[0],a[1]); L.lineTo(b[0],b[1]); L.lineTo(eb[0],eb[1]); L.lineTo(ea[0],ea[1]);
+        L.closePath(); L.fill();
+      }
+    }
+  }
+  // luz ambiente (fria, fraca) — não é afetada pelas sombras
+  L.globalCompositeOperation='lighter';
+  L.fillStyle='rgb(38,34,46)'; L.fillRect(0,0,lw,lh);
+}
+
+function drawObstacles(){
+  const reach = 380 + ball.R*9;
+  for(const o of obstacles){
+    const [cx,cy] = centerOf(o);
+    let ux=ball.x-cx, uy=ball.y-cy; const d=Math.hypot(ux,uy)||1; ux/=d; uy/=d;
+    const I = Math.pow(Math.max(0, 1 - d/reach), 1.4);
+    const lit = `rgb(${40+215*I|0},${32+120*I|0},${28+50*I|0})`;
+    const mid = `rgb(${30+60*I|0},${25+25*I|0},${24+8*I|0})`;
+    ctx.save();
+    if(o.type==='c'){
+      const g=ctx.createRadialGradient(cx+ux*o.r*0.55, cy+uy*o.r*0.55, 0, cx, cy, o.r*1.5);
+      g.addColorStop(0,lit); g.addColorStop(0.45,mid); g.addColorStop(1,'#0c0a09');
+      ctx.fillStyle=g;
+      ctx.beginPath(); ctx.arc(o.x,o.y,o.r,0,Math.PI*2); ctx.fill();
+      // aro iluminado
+      ctx.strokeStyle=`rgba(255,${150+80*I|0},80,${0.15+0.6*I})`; ctx.lineWidth=2;
+      const ang=Math.atan2(uy,ux);
+      ctx.beginPath(); ctx.arc(o.x,o.y,o.r-1,ang-1.1,ang+1.1); ctx.stroke();
+    } else {
+      const m = Math.max(o.w,o.h)/2;
+      const g=ctx.createLinearGradient(cx+ux*m, cy+uy*m, cx-ux*m, cy-uy*m);
+      g.addColorStop(0,lit); g.addColorStop(0.5,mid); g.addColorStop(1,'#0c0a09');
+      ctx.fillStyle=g;
+      roundRect(o.x,o.y,o.w,o.h,6); ctx.fill();
+      ctx.strokeStyle=`rgba(255,${150+80*I|0},80,${0.1+0.45*I})`; ctx.lineWidth=1.5;
+      roundRect(o.x+0.75,o.y+0.75,o.w-1.5,o.h-1.5,6); ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+function roundRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath();
+}
+
+/* ======================================================================
+   Física
+   ====================================================================== */
+function collide(nx, ny, pen){
+  ball.x += nx*pen; ball.y += ny*pen;
+  const vn = ball.vx*nx + ball.vy*ny;
+  if(vn < 0){
+    ball.vx -= (1+RESTITUTION)*vn*nx;
+    ball.vy -= (1+RESTITUTION)*vn*ny;
+    if(-vn > 25){
+      hits++;
+      spawnSparks(ball.x - nx*ball.R, ball.y - ny*ball.R, nx, ny, -vn);
+    }
+  }
+}
+
+function step(dt){
+  const m = params.mass, R = ball.R;
+  // passeio aleatório da direção da força de “vagueio”
+  ball.wander += (Math.random()*2-1) * Math.sqrt(dt) * 4.0;
+  const Fw = params.rand * 1100;
+  let ax = Math.cos(ball.wander)*Fw/m, ay = Math.sin(ball.wander)*Fw/m;
+  // regulação suave para a velocidade de cruzeiro (só muda o módulo)
+  const s = Math.hypot(ball.vx, ball.vy);
+  if(s > 1){
+    const k = (params.cruise - s) * 0.45;
+    ax += ball.vx/s*k; ay += ball.vy/s*k;
+  } else {
+    ax += Math.cos(ball.wander)*params.cruise; ay += Math.sin(ball.wander)*params.cruise;
+  }
+  ball.vx += ax*dt; ball.vy += ay*dt;
+  const s2 = Math.hypot(ball.vx, ball.vy), MAXV = 700;
+  if(s2 > MAXV){ ball.vx *= MAXV/s2; ball.vy *= MAXV/s2; }
+
+  // sub-passos para não atravessar obstáculos
+  const n = Math.max(1, Math.ceil(s2*dt / (R*0.4)));
+  const h = dt/n;
+  for(let k=0;k<n;k++){
+    ball.x += ball.vx*h; ball.y += ball.vy*h;
+    if(ball.x < R) collide(1,0,R-ball.x);
+    if(ball.x > W-R) collide(-1,0,ball.x-(W-R));
+    if(ball.y < R) collide(0,1,R-ball.y);
+    if(ball.y > H-R) collide(0,-1,ball.y-(H-R));
+    for(const o of obstacles){
+      if(o.type==='c'){
+        const dx=ball.x-o.x, dy=ball.y-o.y, d=Math.hypot(dx,dy);
+        if(d < R+o.r && d > 0) collide(dx/d, dy/d, R+o.r-d);
+      } else {
+        const qx=Math.max(o.x,Math.min(ball.x,o.x+o.w)), qy=Math.max(o.y,Math.min(ball.y,o.y+o.h));
+        const dx=ball.x-qx, dy=ball.y-qy, d=Math.hypot(dx,dy);
+        if(d > 0 && d < R) collide(dx/d, dy/d, R-d);
+        else if(d === 0){ // centro dentro do retângulo: empurra pelo eixo de menor penetração
+          const l=ball.x-o.x, r=o.x+o.w-ball.x, t=ball.y-o.y, b=o.y+o.h-ball.y;
+          const mn=Math.min(l,r,t,b);
+          if(mn===l) collide(-1,0,l+R); else if(mn===r) collide(1,0,r+R);
+          else if(mn===t) collide(0,-1,t+R); else collide(0,1,b+R);
+        }
+      }
+    }
+  }
+  rollSun(dt);
+}
+
+/* ======================================================================
+   Partículas
+   ====================================================================== */
+function spawnEmbers(dt){
+  const rate = 50 + ball.R*1.5;
+  let n = rate*dt;
+  while(n > 0){
+    if(Math.random() < n){
+      const a=Math.random()*Math.PI*2, r=ball.R*(0.9+Math.random()*0.25);
+      const sp = 15+Math.random()*35;
+      embers.push({
+        x: ball.x+Math.cos(a)*r, y: ball.y+Math.sin(a)*r,
+        vx: Math.cos(a)*sp - ball.vx*0.25 + (Math.random()-0.5)*20,
+        vy: Math.sin(a)*sp - ball.vy*0.25 + (Math.random()-0.5)*20,
+        life: 0, max: 0.5+Math.random()*1.1, size: 0.8+Math.random()*2.2
+      });
+    }
+    n -= 1;
+  }
+}
+function spawnSparks(x,y,nx,ny,impact){
+  const count = Math.min(40, 6 + impact/8 | 0);
+  for(let i=0;i<count;i++){
+    const a = Math.atan2(ny,nx) + (Math.random()-0.5)*2.4;
+    const sp = impact*(0.5+Math.random()*1.4) + 60;
+    sparks.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:0,max:0.25+Math.random()*0.45});
+  }
+}
+function updateParticles(dt){
+  for(const p of embers){ p.life+=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=0.98; p.vy*=0.98; p.vy-=6*dt; }
+  embers = embers.filter(p => p.life < p.max);
+  for(const p of sparks){ p.life+=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=0.93; p.vy*=0.93; }
+  sparks = sparks.filter(p => p.life < p.max);
+}
+function drawParticles(){
+  ctx.globalCompositeOperation='lighter';
+  for(const p of embers){
+    const t=p.life/p.max, a=(1-t);
+    ctx.fillStyle=`rgba(255,${200-150*t|0},${80-70*t|0},${a*0.85})`;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.size*(1-t*0.5),0,Math.PI*2); ctx.fill();
+  }
+  ctx.lineCap='round';
+  for(const p of sparks){
+    const t=p.life/p.max;
+    ctx.strokeStyle=`rgba(255,${230-120*t|0},${140-120*t|0},${1-t})`;
+    ctx.lineWidth=1.6*(1-t)+0.4;
+    ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x-p.vx*0.03,p.y-p.vy*0.03); ctx.stroke();
+  }
+  ctx.globalCompositeOperation='source-over';
+}
+
+/* ======================================================================
+   Desenho do sol (sprite WebGL + brilho)
+   ====================================================================== */
+function drawSun(){
+  const R = ball.R, S = R*spriteScale;
+  // brilho amplo no ambiente
+  ctx.globalCompositeOperation='lighter';
+  const g=ctx.createRadialGradient(ball.x,ball.y,R*0.8,ball.x,ball.y,R*7);
+  g.addColorStop(0,'rgba(255,150,50,0.35)');
+  g.addColorStop(0.3,'rgba(255,90,20,0.10)');
+  g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=g; ctx.fillRect(ball.x-R*7,ball.y-R*7,R*14,R*14);
+  ctx.globalCompositeOperation='source-over';
+
+  if(hasGL){
+    renderSunSprite();
+    ctx.drawImage(glc, ball.x-S, ball.y-S, 2*S, 2*S);
+  } else { // alternativa sem WebGL
+    const s=ctx.createRadialGradient(ball.x,ball.y,0,ball.x,ball.y,R*1.4);
+    s.addColorStop(0,'#fffbe0'); s.addColorStop(0.5,'#ffc04a'); s.addColorStop(0.7,'#ff6a10');
+    s.addColorStop(0.72,'rgba(255,90,10,0.6)'); s.addColorStop(1,'rgba(255,40,0,0)');
+    ctx.fillStyle=s; ctx.beginPath(); ctx.arc(ball.x,ball.y,R*1.4,0,Math.PI*2); ctx.fill();
+  }
+}
+
+/* ======================================================================
+   Interação: clicar e arrastar
+   ====================================================================== */
+const drag = { active:false, id:null, sx:0, sy:0, cx:0, cy:0 };
+function pointerPos(e){ const r=cv.getBoundingClientRect(); return [e.clientX-r.left, e.clientY-r.top]; }
+function onBall(x,y){ return Math.hypot(x-ball.x, y-ball.y) <= ball.R*1.6 + 8; }
+function dragVec(){
+  let dx=drag.cx-drag.sx, dy=drag.cy-drag.sy; const l=Math.hypot(dx,dy);
+  if(l > MAX_DRAG){ dx*=MAX_DRAG/l; dy*=MAX_DRAG/l; }
+  return [dx,dy];
+}
+cv.addEventListener('pointerdown', e => {
+  const [x,y]=pointerPos(e);
+  if(!onBall(x,y)) return;
+  drag.active=true; drag.id=e.pointerId; drag.sx=drag.cx=x; drag.sy=drag.cy=y;
+  cv.setPointerCapture(e.pointerId); cv.classList.add('drag');
+});
+cv.addEventListener('pointermove', e => {
+  const [x,y]=pointerPos(e);
+  if(drag.active && e.pointerId===drag.id){ drag.cx=x; drag.cy=y; }
+  else cv.classList.toggle('over', onBall(x,y));
+});
+function release(e){
+  if(!drag.active || e.pointerId!==drag.id) return;
+  const [dx,dy]=dragVec();
+  if(Math.hypot(dx,dy) > 4){
+    ball.vx += dx*IMPULSE_PER_PX/params.mass;
+    ball.vy += dy*IMPULSE_PER_PX/params.mass;
+    pushes++;
+    // pequena explosão de faíscas no sentido do empurrão
+    const l=Math.hypot(dx,dy);
+    spawnSparks(ball.x-dx/l*ball.R, ball.y-dy/l*ball.R, -dx/l, -dy/l, l*0.6);
+  }
+  drag.active=false; cv.classList.remove('drag');
+}
+cv.addEventListener('pointerup', release);
+cv.addEventListener('pointercancel', e => { if(e.pointerId===drag.id){ drag.active=false; cv.classList.remove('drag'); } });
+
+function arrow(x1,y1,x2,y2,color,width,dash){
+  const a=Math.atan2(y2-y1,x2-x1), hl=10+width*2;
+  ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=width; ctx.setLineDash(dash||[]);
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2-Math.cos(a)*hl*0.6,y2-Math.sin(a)*hl*0.6); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(x2,y2);
+  ctx.lineTo(x2-Math.cos(a-0.4)*hl, y2-Math.sin(a-0.4)*hl);
+  ctx.lineTo(x2-Math.cos(a+0.4)*hl, y2-Math.sin(a+0.4)*hl);
+  ctx.closePath(); ctx.fill();
+}
+function drawDragUI(){
+  if(!drag.active) return;
+  const [dx,dy]=dragVec(); const l=Math.hypot(dx,dy);
+  if(l < 4) return;
+  ctx.save();
+  ctx.lineCap='round';
+  // arraste (força aplicada)
+  const ux=dx/l, uy=dy/l, st=ball.R*1.15;
+  arrow(ball.x+ux*st, ball.y+uy*st, ball.x+ux*st+dx, ball.y+uy*st+dy, 'rgba(255,220,150,0.9)', 3);
+  // velocidade atual vs. resultante (mostra a inércia)
+  const k=0.6;
+  const nvx=ball.vx+dx*IMPULSE_PER_PX/params.mass, nvy=ball.vy+dy*IMPULSE_PER_PX/params.mass;
+  arrow(ball.x, ball.y, ball.x+ball.vx*k, ball.y+ball.vy*k, 'rgba(255,255,255,0.35)', 2, [5,5]);
+  arrow(ball.x, ball.y, ball.x+nvx*k, ball.y+nvy*k, 'rgba(120,220,255,0.85)', 2.5);
+  const ang = Math.abs(Math.atan2(ball.vx*nvy-ball.vy*nvx, ball.vx*nvx+ball.vy*nvy))*180/Math.PI;
+  ctx.font='12px system-ui,sans-serif'; ctx.fillStyle='rgba(200,240,255,0.9)';
+  ctx.fillText(`desvio ${ang.toFixed(0)}°`, ball.x+nvx*k+8, ball.y+nvy*k-8);
+  ctx.restore();
+}
+
+/* ======================================================================
+   Loop principal
+   ====================================================================== */
+const el = id => document.getElementById(id);
+const sSpeed=el('sSpeed'), sPush=el('sPush'), sHits=el('sHits');
+let last = performance.now(), statT = 0;
+
+function frame(now){
+  let dt = Math.min(0.05, (now-last)/1000); last = now;
+  if(!paused){
+    time += dt;
+    step(dt);
+    spawnEmbers(dt);
+    updateParticles(dt);
+  }
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.globalCompositeOperation='source-over';
+  ctx.drawImage(floorCv,0,0,W,H);
+  drawLighting();
+  ctx.globalCompositeOperation='multiply';
+  ctx.drawImage(lightCv,0,0,W,H);
+  ctx.globalCompositeOperation='source-over';
+  drawObstacles();
+  drawParticles();
+  drawSun();
+  drawDragUI();
+
+  statT += dt;
+  if(statT > 0.15){
+    statT = 0;
+    sSpeed.textContent = Math.hypot(ball.vx,ball.vy).toFixed(0);
+    sPush.textContent = pushes; sHits.textContent = hits;
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ======================================================================
+   Redimensionamento e controles
+   ====================================================================== */
+function resize(){
+  const r = cv.getBoundingClientRect();
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = Math.max(50, r.width); H = Math.max(50, r.height);
+  cv.width = Math.floor(W*DPR); cv.height = Math.floor(H*DPR);
+  ball.x = Math.min(Math.max(ball.x, ball.R), W-ball.R);
+  ball.y = Math.min(Math.max(ball.y, ball.R), H-ball.R);
+  buildFloor();
+  syncObstacles(true);
+}
+let resizeTimer = 0;
+new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 80); }).observe(cv);
+
+function bind(id, fmt, apply){
+  const inp=el(id), out=el(id+'Out');
+  const upd = () => { apply(+inp.value); out.textContent = fmt(+inp.value); };
+  inp.addEventListener('input', upd); upd();
+}
+bind('rand', v => v+'%', v => params.rand = v/100);
+bind('count', v => v, v => { params.count = v; if(W) syncObstacles(false); });
+bind('mass', v => v, v => {
+  params.mass = v; ball.R = radiusFromMass(v);
+  // garante que o sol crescido não fique preso num obstáculo/parede
+  ball.x = Math.min(Math.max(ball.x, ball.R), Math.max(ball.R, W-ball.R));
+  ball.y = Math.min(Math.max(ball.y, ball.R), Math.max(ball.R, H-ball.R));
+});
+bind('speed', v => v+' px/s', v => params.cruise = v);
+el('newMap').addEventListener('click', () => { syncObstacles(true); });
+el('pause').addEventListener('click', e => { paused=!paused; e.target.textContent = paused ? 'Continuar' : 'Pausar'; });
+
+resize();
+ball.x = W*0.5; ball.y = H*0.5; syncObstacles(true);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
